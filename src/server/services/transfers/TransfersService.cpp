@@ -289,10 +289,8 @@ void TransfersService::executeUrlcopy()
             return;
         }
 
-        std::map<std::string, std::list<TransferFile>> scheduledFiles;
-
         std::map<Pair, int> slotsPerLink = allocatorAlgorithm(queues); 
-        scheduledFiles = schedulerFunction(slotsPerLink, queues, availableUrlCopySlots);
+        std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues, availableUrlCopySlots);
 
         // Execute file transfers
         executeFileTransfers(scheduledFiles, availableUrlCopySlots, queues);

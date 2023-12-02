@@ -701,6 +701,182 @@ std::map<Pair, int> MySqlAPI::getLinkCapacities(const std::vector<QueueId>& queu
     }
 }
 
+int MySqlAPI::getMaxPriority(std::string voName, std::string sourceSe, std::string destSe)
+{
+    int fixedPriority = ServerConfig::instance().get<int>("UseFixedJobPriority");
+    soci::indicator isMaxPriorityNull = soci::i_ok;
+    int maxPriority = 3;
+    if (fixedPriority == 0) {
+        // Get highest priority waiting for this queue
+        // We then filter by this, and order by file_id
+        // Doing this, we avoid a order by priority, which would trigger a filesort, which
+        // can be pretty slow...
+        sql << "SELECT MAX(priority) "
+            "FROM t_file "
+            "WHERE "
+            "    vo_name=:voName AND source_se=:source AND dest_se=:dest AND "
+            "    file_state = 'SUBMITTED' AND "
+            "    hashed_id BETWEEN :hStart AND :hEnd",
+            soci::use(voName), soci::use(sourceSe), soci::use(destSe),
+            soci::use(hashSegment.start), soci::use(hashSegment.end),
+            soci::into(maxPriority, isMaxPriorityNull);
+        if (isMaxPriorityNull == soci::i_null) {
+            FTS3_COMMON_LOGGER_NEWLOG(WARNING) << "NULL MAX(priority), skip entry" << commit;
+            continue;
+        }
+    } 
+    else 
+    {
+        FTS3_COMMON_LOGGER_NEWLOG(WARNING) << __func__
+        << " Using fixed priority for Jobs."
+        << commit;
+
+        maxPriority=fixedPriority;
+    }
+
+    return maxPriority;
+}
+
+void MySqlAPI::getTransferFileUsingActivityFilesNum(
+    std::string sourceSe,
+    std::string destSe,
+    std::string voName,
+    std::set<std::string>& default_activities,
+    std::map<std::string, int>& activityFilesNum,
+    std::map<std::string, std::list<TransferFile> >& files)
+{
+    // we are always checking empty string
+    std::string def_act = " (''";
+    if (!default_activities.empty())
+    {
+        std::set<std::string>::const_iterator it_def;
+        for (it_def = default_activities.begin(); it_def != default_activities.end(); ++it_def)
+        {
+            def_act += ", '" + *it_def + "'";
+        }
+    }
+    def_act += ") ";
+
+    // Shuffle the map via intermediary vector
+    using ActivityNumTuple = std::pair<std::string, int>;
+    std::vector<ActivityNumTuple> vActivityFilesNum;
+    vActivityFilesNum.reserve(activityFilesNum.size());
+
+    for (auto it_act = activityFilesNum.begin(); it_act != activityFilesNum.end(); ++it_act)
+    {
+        vActivityFilesNum.emplace_back(it_act->first, it_act->second);
+    }
+
+    auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+    auto random_engine = std::default_random_engine{seed};
+    std::shuffle(vActivityFilesNum.begin(), vActivityFilesNum.end(), random_engine);
+
+    for (auto it_act = vActivityFilesNum.begin(); it_act != vActivityFilesNum.end(); ++it_act)
+    {
+        if (it_act->second == 0) continue;
+
+        std::string select = " SELECT f.file_state, f.source_surl, f.dest_surl, f.job_id, j.vo_name, "
+                                "       f.file_id, j.overwrite_flag, j.archive_timeout, j.dst_file_report, "
+                                "       j.user_dn, j.cred_id, f.checksum, j.checksum_method, j.source_space_token, "
+                                "       j.space_token, j.copy_pin_lifetime, j.bring_online, "
+                                "       f.user_filesize, f.file_metadata, f.archive_metadata, j.job_metadata, "
+                                "       f.file_index, f.bringonline_token, f.scitag, "
+                                "       f.source_se, f.dest_se, f.selection_strategy, j.internal_job_params, j.job_type "
+                                " FROM t_file f USE INDEX(idx_link_state_vo), t_job j "
+                                " WHERE f.job_id = j.job_id and  f.file_state = 'SUBMITTED' AND    "
+                                "      f.source_se = :source_se AND f.dest_se = :dest_se AND "
+                                "      (j.job_type = 'N' OR j.job_type = 'R') AND  "
+                                "      f.vo_name = :vo_name AND "
+                                "      (f.retry_timestamp is NULL OR f.retry_timestamp < :tTime) AND ";
+        select +=
+            it_act->first == "default" ?
+            "     (f.activity = :activity OR f.activity IS NULL OR f.activity IN " + def_act + ") AND "
+            :
+            "     f.activity = :activity AND ";
+        select +=
+            "   (f.hashed_id >= :hStart AND f.hashed_id <= :hEnd) AND "
+            "   j.priority = :maxPriority "
+            "   ORDER BY file_id ASC "
+            "   LIMIT :filesNum";
+
+
+        soci::rowset<TransferFile> rs = (
+                sql.prepare <<
+                select,
+                soci::use(sourceSe),
+                soci::use(destSe),
+                soci::use(voName),
+                soci::use(tTime),
+                soci::use(it_act->first),
+                soci::use(hashSegment.start), soci::use(hashSegment.end),
+                soci::use(maxPriority),
+                soci::use(it_act->second)
+        );
+
+        for (auto ti = rs.begin(); ti != rs.end(); ++ti)
+        {
+            TransferFile& tfile = *ti;
+
+            if(tfile.jobType == Job::kTypeMultipleReplica)
+            {
+                int total = 0;
+                int remain = 0;
+                sql << " select count(*) as c1, "
+                    " (select count(*) from t_file where file_state<>'NOT_USED' and  job_id=:job_id)"
+                    " as c2 from t_file where job_id=:job_id",
+                    soci::use(tfile.jobId),
+                    soci::use(tfile.jobId),
+                    soci::into(total),
+                    soci::into(remain);
+
+                tfile.lastReplica = (total == remain)? 1: 0;
+            }
+            if(tfile.jobType == Job::kTypeMultiHop)
+            {
+                int maxIndex = 0;
+                sql << "SELECT MAX(file_index) "
+                        "FROM t_file "
+                        "WHERE job_id = :job_id ",
+                        soci::use(tfile.jobId),
+                        soci::into(maxIndex);
+
+                tfile.lastHop = (maxIndex == tfile.fileIndex)? 1: 0;
+            }
+
+            tfile.activity = it_act->first;
+            files[tfile.voName].push_back(tfile);
+        }
+    }
+}
+
+// TODO: add to header file, public
+void MySqlAPI::getTransferFilesForVo(
+    std::string sourceSe,
+    std::string destSe,
+    std::string voName,
+    std::map<std::string, int>& activityFilesNum,
+    std::map<std::string, std::list<TransferFile>>& files)
+{
+    // Fetch max priority in queue
+    int maxPriority = getMaxPriority(voName, source, destSe);
+
+    struct tm tTime;
+    gmtime_r(&now, &tTime);
+
+    // TODO: figure out what to do with this default activity thing
+    // (activities with share set to default)
+    std::set<std::string> default_activities;
+
+    // Assign based on activityFilesNum
+    getTransferFileUsingActivityFilesNum(
+        sourceSe,
+        destSe
+        voName,
+        default_activities,
+        activityFilesNum,
+        files);
+}
+
 void MySqlAPI::getReadyTransfers(const std::vector<QueueId>& queues,
         std::map<std::string, std::list<TransferFile> >& files,
         std::map<Pair, int> &slotsPerLink)
@@ -722,36 +898,9 @@ void MySqlAPI::getReadyTransfers(const std::vector<QueueId>& queues,
             }
             int filesNum = slotsPerLink[pair];
 
-            int fixedPriority =  ServerConfig::instance().get<int> ("UseFixedJobPriority");
-            soci::indicator isMaxPriorityNull = soci::i_ok;
-            int maxPriority = 3;
-            if (fixedPriority == 0) {
-                // Get highest priority waiting for this queue
-                // We then filter by this, and order by file_id
-                // Doing this, we avoid a order by priority, which would trigger a filesort, which
-                // can be pretty slow...
-                sql << "SELECT MAX(priority) "
-                   "FROM t_file "
-                   "WHERE "
-                   "    vo_name=:voName AND source_se=:source AND dest_se=:dest AND "
-                   "    file_state = 'SUBMITTED' AND "
-                   "    hashed_id BETWEEN :hStart AND :hEnd",
-                   soci::use(it->voName), soci::use(it->sourceSe), soci::use(it->destSe),
-                   soci::use(hashSegment.start), soci::use(hashSegment.end),
-                   soci::into(maxPriority, isMaxPriorityNull);
-                if (isMaxPriorityNull == soci::i_null) {
-                   FTS3_COMMON_LOGGER_NEWLOG(WARNING) << "NULL MAX(priority), skip entry" << commit;
-                   continue;
-                }
-            } 
-            else 
-            {
-                FTS3_COMMON_LOGGER_NEWLOG(WARNING) << __func__
-                << " Using fixed priority for Jobs."
-                << commit;
+            // Fetch max priority in queue
+            int maxPriority = getMaxPriority(it->voName, it->sourceSe, it->destSe);
 
-                maxPriority=fixedPriority;
-            }
             std::set<std::string> default_activities;
             std::map<std::string, int> activityFilesNum =
                 getFilesNumPerActivity(sql, it->sourceSe, it->destSe, it->voName, filesNum, default_activities);
@@ -822,108 +971,13 @@ void MySqlAPI::getReadyTransfers(const std::vector<QueueId>& queues,
             }
             else
             {
-                // we are always checking empty string
-                std::string def_act = " (''";
-                if (!default_activities.empty())
-                {
-                    std::set<std::string>::const_iterator it_def;
-                    for (it_def = default_activities.begin(); it_def != default_activities.end(); ++it_def)
-                    {
-                        def_act += ", '" + *it_def + "'";
-                    }
-                }
-                def_act += ") ";
-
-                // Shuffle the map via intermediary vector
-                using ActivityNumTuple = std::pair<std::string, int>;
-                std::vector<ActivityNumTuple> vActivityFilesNum;
-                vActivityFilesNum.reserve(activityFilesNum.size());
-
-                for (auto it_act = activityFilesNum.begin(); it_act != activityFilesNum.end(); ++it_act)
-                {
-                    vActivityFilesNum.emplace_back(it_act->first, it_act->second);
-                }
-
-                auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-                auto random_engine = std::default_random_engine{seed};
-                std::shuffle(vActivityFilesNum.begin(), vActivityFilesNum.end(), random_engine);
-
-                for (auto it_act = vActivityFilesNum.begin(); it_act != vActivityFilesNum.end(); ++it_act)
-                {
-                    if (it_act->second == 0) continue;
-
-                    std::string select = " SELECT f.file_state, f.source_surl, f.dest_surl, f.job_id, j.vo_name, "
-                                         "       f.file_id, j.overwrite_flag, j.archive_timeout, j.dst_file_report, "
-                                         "       j.user_dn, j.cred_id, f.checksum, j.checksum_method, j.source_space_token, "
-                                         "       j.space_token, j.copy_pin_lifetime, j.bring_online, "
-                                         "       f.user_filesize, f.file_metadata, f.archive_metadata, j.job_metadata, "
-                                         "       f.file_index, f.bringonline_token, f.scitag, "
-                                         "       f.source_se, f.dest_se, f.selection_strategy, j.internal_job_params, j.job_type "
-                                         " FROM t_file f USE INDEX(idx_link_state_vo), t_job j "
-                                         " WHERE f.job_id = j.job_id and  f.file_state = 'SUBMITTED' AND    "
-                                         "      f.source_se = :source_se AND f.dest_se = :dest_se AND "
-                                         "      (j.job_type = 'N' OR j.job_type = 'R') AND  "
-                                         "      f.vo_name = :vo_name AND "
-                                         "      (f.retry_timestamp is NULL OR f.retry_timestamp < :tTime) AND ";
-                    select +=
-                        it_act->first == "default" ?
-                        "     (f.activity = :activity OR f.activity IS NULL OR f.activity IN " + def_act + ") AND "
-                        :
-                        "     f.activity = :activity AND ";
-                    select +=
-                        "   (f.hashed_id >= :hStart AND f.hashed_id <= :hEnd) AND "
-                        "   j.priority = :maxPriority "
-                        "   ORDER BY file_id ASC "
-                        "   LIMIT :filesNum";
-
-
-                    soci::rowset<TransferFile> rs = (
-                         sql.prepare <<
-                         select,
-                         soci::use(it->sourceSe),
-                         soci::use(it->destSe),
-                         soci::use(it->voName),
-                         soci::use(tTime),
-                         soci::use(it_act->first),
-                         soci::use(hashSegment.start), soci::use(hashSegment.end),
-                         soci::use(maxPriority),
-                         soci::use(it_act->second)
-                    );
-
-                    for (auto ti = rs.begin(); ti != rs.end(); ++ti)
-                    {
-                        TransferFile& tfile = *ti;
-
-                        if(tfile.jobType == Job::kTypeMultipleReplica)
-                        {
-                            int total = 0;
-                            int remain = 0;
-                            sql << " select count(*) as c1, "
-                                " (select count(*) from t_file where file_state<>'NOT_USED' and  job_id=:job_id)"
-                                " as c2 from t_file where job_id=:job_id",
-                                soci::use(tfile.jobId),
-                                soci::use(tfile.jobId),
-                                soci::into(total),
-                                soci::into(remain);
-
-                            tfile.lastReplica = (total == remain)? 1: 0;
-                        }
-                        if(tfile.jobType == Job::kTypeMultiHop)
-                        {
-                            int maxIndex = 0;
-                            sql << "SELECT MAX(file_index) "
-                                   "FROM t_file "
-                                   "WHERE job_id = :job_id ",
-                                    soci::use(tfile.jobId),
-                                    soci::into(maxIndex);
-
-                            tfile.lastHop = (maxIndex == tfile.fileIndex)? 1: 0;
-                        }
-
-                        tfile.activity = it_act->first;
-                        files[tfile.voName].push_back(tfile);
-                    }
-                }
+                // Assign based on activityFilesNum
+                getTransferFileUsingActivityFilesNum(it->sourceSe,
+                    it->destSe
+                    it->voName,
+                    default_activities,
+                    activityFilesNum,
+                    files);
             }
         }
     }

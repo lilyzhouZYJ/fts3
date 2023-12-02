@@ -366,6 +366,16 @@ private:
     void updateHeartBeatInternal(soci::session& sql, unsigned* index, unsigned* count, unsigned* start, unsigned* end,
         std::string serviceName);
 
+    int getMaxPriority(std::string voName, std::string sourceSe, std::string destSe);
+
+    void getTransferFileUsingActivityFilesNum(
+        std::string sourceSe,
+        std::string destSe,
+        std::string voName,
+        std::set<std::string>& default_activities,
+        std::map<std::string, int>& activityFilesNum,
+        std::map<std::string, std::list<TransferFile> >& files);
+
     std::map<std::string, int> getFilesNumPerActivity(soci::session& sql,
         std::string src, std::string dst, std::string vo, int filesNum,
         std::set<std::string> & defaultActivities);
