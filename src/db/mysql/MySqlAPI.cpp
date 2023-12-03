@@ -277,76 +277,26 @@ std::list<fts3::events::MessageUpdater> MySqlAPI::getActiveInHost(const std::str
 std::map<std::string, long long> MySqlAPI::getSubmittedCountInActivity(std::string src, std::string dst, std::string vo)
 {
     soci::session sql(*connectionPool);
-    std::map<std::string, long long> ret;
-
-    try
-    {
-        std::string vo_exists;
-        soci::indicator isNull = soci::i_ok;
-
-        sql << "SELECT vo FROM t_activity_share_config where vo=:vo", soci::use(vo), soci::into(vo_exists, isNull);
-        if(isNull == soci::i_null)
-            return ret;
-
-
-        soci::rowset<soci::row> rs = (
-                                         sql.prepare <<
-                                         " SELECT activity, COUNT(DISTINCT f.job_id, f.file_index) AS count "
-                                         " FROM t_file f USE INDEX(idx_link_state_vo) INNER JOIN t_job j ON (f.job_id = j.job_id) WHERE "
-                                         "  j.vo_name = f.vo_name AND f.file_state = 'ACTIVE' AND "
-                                         "  f.source_se = :source AND f.dest_se = :dest AND "
-                                         "  f.vo_name = :vo_name AND j.vo_name = f.vo_name AND "
-                                         "  (f.hashed_id >= :hStart AND f.hashed_id <= :hEnd) AND "
-                                         "  (j.job_type = 'N' OR j.job_type = 'R' OR j.job_type IS NULL) "
-                                         " GROUP BY activity ORDER BY NULL ",
-                                         soci::use(src),
-                                         soci::use(dst),
-                                         soci::use(vo),
-                                         soci::use(hashSegment.start),
-                                         soci::use(hashSegment.end)
-                                     );
-
-        ret.clear();
-
-        soci::rowset<soci::row>::const_iterator it;
-        for (it = rs.begin(); it != rs.end(); it++)
-        {
-            std::string activity_name;
-
-            if (it->get_indicator("activity") == soci::i_null) {
-                activity_name = "default";
-            }
-            else {
-                activity_name = it->get<std::string>("activity");
-                if (activity_name.empty()) {
-                    activity_name = "default";
-                }
-            }
-
-            boost::algorithm::to_lower(activity_name);
-            long long nFiles = it->get<long long>("count");
-            ret[activity_name] = nFiles;
-        }
-    }
-    catch (std::exception& e)
-    {
-        throw UserError(std::string(__func__) + ": Caught exception " + e.what());
-    }
-    catch (...)
-    {
-        throw UserError(std::string(__func__) + ": Caught exception " );
-    }
-
-    return ret;
+    return getJobsOfStatusInQueue(sql, src, dst, vo, "SUBMITTED");
 }
 
 std::map<std::string, long long> MySqlAPI::getActiveCountForEachActivity(std::string src, std::string dst, std::string vo)
 {
     soci::session sql(*connectionPool);
-    return getActivitiesInQueue(sql, src, dst, vo);
+    return getJobsOfStatusInQueue(sql, src, dst, vo, "ACTIVE");
 }
 
 std::map<std::string, long long> MySqlAPI::getActivitiesInQueue(soci::session& sql, std::string src, std::string dst, std::string vo)
+{
+    return getJobsOfStatusInQueue(sql, src, dst, vo, "SUBMITTED");
+}
+
+std::map<std::string, long long> MySqlAPI::getJobsOfStatusInQueue(
+    soci::session& sql, 
+    std::string src, 
+    std::string dst, 
+    std::string vo,
+    std::string status)
 {
     std::map<std::string, long long> ret;
 
@@ -364,12 +314,13 @@ std::map<std::string, long long> MySqlAPI::getActivitiesInQueue(soci::session& s
                                          sql.prepare <<
                                          " SELECT activity, COUNT(DISTINCT f.job_id, f.file_index) AS count "
                                          " FROM t_file f USE INDEX(idx_link_state_vo) INNER JOIN t_job j ON (f.job_id = j.job_id) WHERE "
-                                         "  j.vo_name = f.vo_name AND f.file_state = 'SUBMITTED' AND "
+                                         "  j.vo_name = f.vo_name AND f.file_state = :status AND "
                                          "  f.source_se = :source AND f.dest_se = :dest AND "
                                          "  f.vo_name = :vo_name AND j.vo_name = f.vo_name AND "
                                          "  (f.hashed_id >= :hStart AND f.hashed_id <= :hEnd) AND "
                                          "  (j.job_type = 'N' OR j.job_type = 'R' OR j.job_type IS NULL) "
                                          " GROUP BY activity ORDER BY NULL ",
+                                         soci::use(status),
                                          soci::use(src),
                                          soci::use(dst),
                                          soci::use(vo),
@@ -702,6 +653,8 @@ std::map<Pair, int> MySqlAPI::getLinkCapacities(const std::vector<QueueId>& queu
 
 int MySqlAPI::getMaxPriority(std::string voName, std::string sourceSe, std::string destSe)
 {
+    soci::session sql(*connectionPool);
+
     int fixedPriority = ServerConfig::instance().get<int>("UseFixedJobPriority");
     soci::indicator isMaxPriorityNull = soci::i_ok;
     int maxPriority = 3;
@@ -721,7 +674,6 @@ int MySqlAPI::getMaxPriority(std::string voName, std::string sourceSe, std::stri
             soci::into(maxPriority, isMaxPriorityNull);
         if (isMaxPriorityNull == soci::i_null) {
             FTS3_COMMON_LOGGER_NEWLOG(WARNING) << "NULL MAX(priority), skip entry" << commit;
-            continue;
         }
     } 
     else 
@@ -742,6 +694,8 @@ void MySqlAPI::getTransferFileUsingActivityFilesNum(
     std::string voName,
     std::set<std::string>& default_activities,
     std::map<std::string, int>& activityFilesNum,
+    struct tm tTime,
+    int maxPriority,
     std::map<std::string, std::list<TransferFile> >& files)
 {
     // we are always checking empty string
@@ -769,6 +723,8 @@ void MySqlAPI::getTransferFileUsingActivityFilesNum(
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto random_engine = std::default_random_engine{seed};
     std::shuffle(vActivityFilesNum.begin(), vActivityFilesNum.end(), random_engine);
+
+    soci::session sql(*connectionPool);
 
     for (auto it_act = vActivityFilesNum.begin(); it_act != vActivityFilesNum.end(); ++it_act)
     {
@@ -801,15 +757,15 @@ void MySqlAPI::getTransferFileUsingActivityFilesNum(
 
         soci::rowset<TransferFile> rs = (
                 sql.prepare <<
-                select,
-                soci::use(sourceSe),
-                soci::use(destSe),
-                soci::use(voName),
-                soci::use(tTime),
-                soci::use(it_act->first),
-                soci::use(hashSegment.start), soci::use(hashSegment.end),
-                soci::use(maxPriority),
-                soci::use(it_act->second)
+                    select,
+                    soci::use(sourceSe),
+                    soci::use(destSe),
+                    soci::use(voName),
+                    soci::use(tTime),
+                    soci::use(it_act->first),
+                    soci::use(hashSegment.start), soci::use(hashSegment.end),
+                    soci::use(maxPriority),
+                    soci::use(it_act->second)
         );
 
         for (auto ti = rs.begin(); ti != rs.end(); ++ti)
@@ -855,8 +811,10 @@ void MySqlAPI::getTransferFilesForVo(
     std::map<std::string, int>& activityFilesNum,
     std::map<std::string, std::list<TransferFile>>& files)
 {
+    time_t now = time(NULL);
+
     // Fetch max priority in queue
-    int maxPriority = getMaxPriority(voName, source, destSe);
+    int maxPriority = getMaxPriority(voName, sourceSe, destSe);
 
     struct tm tTime;
     gmtime_r(&now, &tTime);
@@ -868,10 +826,12 @@ void MySqlAPI::getTransferFilesForVo(
     // Assign based on activityFilesNum
     getTransferFileUsingActivityFilesNum(
         sourceSe,
-        destSe
+        destSe,
         voName,
         default_activities,
         activityFilesNum,
+        tTime,
+        maxPriority,
         files);
 }
 
@@ -970,11 +930,14 @@ void MySqlAPI::getReadyTransfers(const std::vector<QueueId>& queues,
             else
             {
                 // Assign based on activityFilesNum
-                getTransferFileUsingActivityFilesNum(it->sourceSe,
-                    it->destSe
+                getTransferFileUsingActivityFilesNum(
+                    it->sourceSe,
+                    it->destSe,
                     it->voName,
                     default_activities,
                     activityFilesNum,
+                    tTime,
+                    maxPriority,
                     files);
             }
         }

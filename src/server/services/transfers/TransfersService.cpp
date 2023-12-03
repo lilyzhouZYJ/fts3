@@ -115,7 +115,10 @@ void TransfersService::executeFileTransfers(
     int availableUrlCopySlots,
     std::vector<QueueId> queues
 ){
+    auto db = DBSingleton::instance().getDBObjectInstance();
+
     ThreadPool<FileTransferExecutor> execPool(execPoolSize);
+    std::map<std::string, int> slotsLeftForSource, slotsLeftForDestination;
     for (auto i = queues.begin(); i != queues.end(); ++i) {
         // To reduce queries, fill in one go limits as source and as destination
         if (slotsLeftForDestination.count(i->destSe) == 0) {
@@ -258,7 +261,7 @@ void TransfersService::executeUrlcopy()
 {
     std::vector<QueueId> queues;
     boost::thread_group g;
-    auto db = DBSingleton::instance().getDBObjectInstance();
+    
     // Bail out as soon as possible if there are too many url-copy processes
     int maxUrlCopy = config::ServerConfig::instance().get<int>("MaxUrlCopyProcesses");
     int urlCopyCount = countProcessesWithName("fts_url_copy");

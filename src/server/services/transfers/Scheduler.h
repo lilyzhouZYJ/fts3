@@ -46,13 +46,12 @@ public:
     using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&, int);
 
     // Returns function pointer to the scheduler algorithm
-    // TODO: why static??
     static SchedulerFunction getSchedulerFunction();
 
-private:
     // Stores deficits of queues
-    std::map<VoName, std::map<ActivityName, int>> allQueueDeficits;
+    static std::map<VoName, std::map<ActivityName, int>> allQueueDeficits;
 
+private:
     // The scheduling functions below should execute the corresponding
     // scheduling algorithm, and they should return a mapping from
     // VOs to the list of TransferFiles to be scheduled by TransferService.
@@ -65,7 +64,7 @@ private:
      * TODO: can remove availableUrlCopySlots
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
+    static std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
 
     /**
      * Run deficit-based priority queueing scheduling.
@@ -75,7 +74,7 @@ private:
      * TODO: can remove availableUrlCopySlots
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
+    static std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
 
     /* Helper functions */
     
@@ -85,7 +84,7 @@ private:
      * @param dest Destination node
      * @param voActivityShare Maps each VO to a mapping between each of its activities to the activity's weight
     */
-    std::map<VoName, std::map<ActivityName, long long>> computeActiveCounts(
+    static std::map<VoName, std::map<ActivityName, long long>> computeActiveCounts(
         std::string src,
         std::string dest,
         std::map<std::string, std::map<std::string, double>> &voActivityShare
@@ -97,7 +96,7 @@ private:
      * @param dest Destination node
      * @param voActivityShare Maps each VO to a mapping between each of its activities to the activity's weight
     */
-    std::map<VoName, std::map<ActivityName, long long>> computeSubmittedCounts(
+    static std::map<VoName, std::map<ActivityName, long long>> computeSubmittedCounts(
         std::string src,
         std::string dest,
         std::map<std::string, std::map<std::string, double>> &voActivityShare
@@ -111,12 +110,12 @@ private:
      * @param queueActiveCounts Maps each VO to a mapping between each of its activities to the activity's number of active slots.
      * @param queueSubmittedCounts Maps each VO to a mapping between each of its activities to the activity's number of submitted slots.
     */
-    std::map<VoName, std::map<ActivityName, int>> computeShouldBeSlots(
-        Pair &p,
+    static std::map<VoName, std::map<ActivityName, int>> computeShouldBeSlots(
+        const Pair &p,
         int maxPairSlots,
         std::map<VoName, std::map<ActivityName, double>> &voActivityShare,
-        std::map<VoName, std::map<ActivityName, int>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, int>> &queueSubmittedCounts
+        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
+        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
     );
 
     /**
@@ -126,11 +125,11 @@ private:
      * @param queueActiveCounts Number of active transfers associated with each VO and each activity in the VO.
      * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
     */
-    std::map<VoName, int> assignShouldBeSlotsToVos(
+    static std::map<VoName, int> assignShouldBeSlotsToVos(
         std::map<VoName, double> &voWeights,
         int maxPairSlots,
-        std::map<VoName, std::map<ActivityName, int>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, int>> &queueSubmittedCounts
+        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
+        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
     );
 
     /**
@@ -140,11 +139,11 @@ private:
      * @param activityActiveCounts Number of active transfers associated with each activity.
      * @param activitySubmittedCounts Number of submitted transfers associated with each activity.
     */
-    std::map<ActivityName, int> assignShouldBeSlotsToActivities(
+    static std::map<ActivityName, int> assignShouldBeSlotsToActivities(
         std::map<ActivityName, double> &activityWeights,
         int voMaxSlots,
-        std::map<ActivityName, int> &activityActiveCounts,
-        std::map<ActivityName, int> &activitySubmittedCounts
+        std::map<ActivityName, long long> &activityActiveCounts,
+        std::map<ActivityName, long long> &activitySubmittedCounts
     );
 
     /**
@@ -154,10 +153,10 @@ private:
      * @param maxSlots Max number of slots to be allocated.
      * @param activeAndPendingCounts Number of active or pending transfers for each queue.
     */
-    std::map<std::string, int> assignShouldBeSlotsUsingHuntingtonHill(
+    static std::map<std::string, int> assignShouldBeSlotsUsingHuntingtonHill(
         std::map<std::string, double> &weights,
         int maxSlots,
-        std::map<std::string, int> &activeAndPendingCounts
+        std::map<std::string, long long> &activeAndPendingCounts
     );
 
     /**
@@ -166,10 +165,10 @@ private:
      * @param queueActiveCounts Number of active slots for each activity in each VO.
      * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
     */
-    void computeDeficits(
+    static void computeDeficits(
         std::map<VoName, std::map<ActivityName, int>> &queueShouldBeAllocated,
-        std::map<VoName, std::map<ActivityName, int>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, int>>& queueSubmittedCounts
+        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
+        std::map<VoName, std::map<ActivityName, long long>>& queueSubmittedCounts
     );
 
     /**
@@ -179,11 +178,11 @@ private:
      * @param queueActiveCounts Number of active slots for each activity in each VO.
      * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
     */
-    std::map<VoName, std::map<ActivityName, int>>& assignSlotsUsingDeficit(
+    static std::map<VoName, std::map<ActivityName, int>> assignSlotsUsingDeficit(
         int maxSlots,
         std::priority_queue<std::tuple<int, VoName, ActivityName>>& deficitPq,
-        std::map<VoName, std::map<ActivityName, int>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, int>> &queueSubmittedCounts
+        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
+        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
     );
 
     /**
@@ -192,11 +191,18 @@ private:
      * @param assignedSlotCounts The number of slots assigned to a queue.
      * @param[out] scheduledFiles Mapping from each VO to the list of transfers to be scheduled.
     */
-    void getTransferFilesBasedOnSlots(
+    static void getTransferFilesBasedOnSlots(
         Pair pair,
         std::map<VoName, std::map<ActivityName, int>>& assignedSlotCounts,
         std::map<VoName, std::list<TransferFile>>& scheduledFiles
     );
+
+    /**
+     * Transfers in unschedulable queues must be set to fail.
+     * @param[out] unschedulable    List of unschedulable transfers.
+     * @param slotsPerLink          Number of slots allocated to a link.
+    */
+    static void failUnschedulable(const std::vector<QueueId> &unschedulable, std::map<Pair, int> &slotsPerLink);
 };
 
 

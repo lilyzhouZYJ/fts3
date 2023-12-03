@@ -400,6 +400,15 @@ public:
     /// Get link capacities for the given queues
     virtual std::map<Pair, int> getLinkCapacities(const std::vector<QueueId>& queues,
         std::map< std::string, std::list<TransferFile>>& files);
+
+    /// Get the activity share for the given vo
+    virtual std::map<std::string, double> getActivityShareForVo(std::string vo) = 0;
+
+    /// Get the number of active transfers for each activity in the given vo for the given link
+    virtual std::map<std::string, long long> getActiveCountForEachActivity(const std::string src, const std::string dst, const std::string vo) = 0;
+
+    /// Get the number of submitted files in each activity within a (src, dst, vo)
+    virtual std::map<std::string, long long> getSubmittedCountInActivity(std::string src, std::string dst, std::string vo);
 };
 
 #endif // GENERICDBIFCE_H_

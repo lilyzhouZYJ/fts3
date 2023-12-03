@@ -51,7 +51,7 @@ public:
     virtual std::list<fts3::events::MessageUpdater> getActiveInHost(const std::string &host);
 
     /// Get the number of submitted files in each activity within a (src, dst, vo)
-    virtual std::map<std::string, long long> MySqlAPI::getSubmittedCountInActivity(std::string src, std::string dst, std::string vo);
+    virtual std::map<std::string, long long> getSubmittedCountInActivity(std::string src, std::string dst, std::string vo);
 
     /// Get a list of transfers ready to go for the given queues
     /// When session reuse is enabled for a job, all the files belonging to that job should run at once
@@ -74,7 +74,7 @@ public:
     /// @param voName               Name of the vo
     /// @param activityFilesNum     Number of slots assigned to each activity in the vo
     /// @param[out] files           A map where the key is the vo, the value is a list of transfers belonging to that vo
-    virtual void MySqlAPI::getTransferFilesForVo(
+    virtual void getTransferFilesForVo(
         std::string sourceSe,
         std::string destSe,
         std::string voName,
@@ -387,11 +387,20 @@ private:
         std::string voName,
         std::set<std::string>& default_activities,
         std::map<std::string, int>& activityFilesNum,
+        struct tm tTime,
+        int maxPriority,
         std::map<std::string, std::list<TransferFile> >& files);
 
     std::map<std::string, int> getFilesNumPerActivity(soci::session& sql,
         std::string src, std::string dst, std::string vo, int filesNum,
         std::set<std::string> & defaultActivities);
+    
+    std::map<std::string, long long> getJobsOfStatusInQueue(
+        soci::session& sql, 
+        std::string src, 
+        std::string dst, 
+        std::string vo,
+        std::string status);
 
     std::map<std::string, long long> getActivitiesInQueue(soci::session& sql, std::string src,
         std::string dst, std::string vo);
