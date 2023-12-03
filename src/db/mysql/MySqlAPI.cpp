@@ -642,8 +642,7 @@ static int getActiveCount(soci::session& sql, const std::string &source, const s
 /// @param source Source storage
 /// @param dest Destination storage
 /// @return bool indicating if there is an upper bound capacity on link
-/// @return int representing maxActive on link
-/// @return int representing currentActive on link
+/// @return int representing upper bound on link
 boost::tuple<bool, int> linkUpperBound(soci::session& sql, std::string sourceSe, std::string destSe) {
     int maxActive = 0;
     soci::indicator maxActiveNull = soci::i_ok;

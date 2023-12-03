@@ -60,7 +60,7 @@ void MaximumFlow::MaximumFlowSolver::addEdge(int from, int to, int capacity) {
     // From edge
     Edge* e1 = new Edge(from, to, capacity);
     // To Edge
-    Edge* e2 = new Edge(to, from, capacity);
+    Edge* e2 = new Edge(to, from, 0);
     e1->residual = e2;
     e2->residual = e1;
 

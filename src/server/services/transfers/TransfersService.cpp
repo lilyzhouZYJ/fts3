@@ -58,8 +58,8 @@ TransfersService::TransfersService(): BaseService("TransfersService")
     monitoringMessages = config::ServerConfig::instance().get<bool>("MonitoringMessaging");
     schedulingInterval = config::ServerConfig::instance().get<boost::posix_time::time_duration>("SchedulingInterval"); 
 
+    allocatorFunction = Allocator::getAllocatorFunction();
     schedulerFunction = Scheduler::getSchedulerFunction();
-    allocatorAlgorithm = Allocator::getAllocatorFunction();
 }
 
 TransfersService::~TransfersService()
@@ -289,7 +289,7 @@ void TransfersService::executeUrlcopy()
             return;
         }
 
-        std::map<Pair, int> slotsPerLink = allocatorAlgorithm(queues); 
+        std::map<Pair, int> slotsPerLink = allocatorFunction(queues); 
         std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues, availableUrlCopySlots);
 
         // Execute file transfers
