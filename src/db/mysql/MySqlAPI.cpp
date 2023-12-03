@@ -849,7 +849,6 @@ void MySqlAPI::getTransferFileUsingActivityFilesNum(
     }
 }
 
-// TODO: add to header file, public
 void MySqlAPI::getTransferFilesForVo(
     std::string sourceSe,
     std::string destSe,

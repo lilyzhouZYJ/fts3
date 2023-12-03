@@ -68,6 +68,19 @@ public:
         std::map< std::string, std::list<TransferFile>>& files,
         std::map<Pair, int> &slotsPerLink);
 
+    /// Get a list of transfers to be scheduled for a vo
+    /// @param sourceSe             Source
+    /// @param destSe               Destination
+    /// @param voName               Name of the vo
+    /// @param activityFilesNum     Number of slots assigned to each activity in the vo
+    /// @param[out] files           A map where the key is the vo, the value is a list of transfers belonging to that vo
+    virtual void MySqlAPI::getTransferFilesForVo(
+        std::string sourceSe,
+        std::string destSe,
+        std::string voName,
+        std::map<std::string, int>& activityFilesNum,
+        std::map<std::string, std::list<TransferFile>>& files);
+
     /// Update the status of a transfer
     /// @param jobId            The job ID
     /// @param fileId           The file ID
