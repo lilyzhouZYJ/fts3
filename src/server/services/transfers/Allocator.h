@@ -54,10 +54,12 @@ private:
      */
     static std::map<Pair, int> GreedyAllocator(std::vector<QueueId> &queues);
 
-    // Run maximum flow based allocator algorithm
+    /**
+     * Run maximum flow allocator algorithm
+     * @param queues All current pending transfers
+     * @return Number of slots assigned to each link
+     */
     static std::map<Pair, int> MaximumFlowAllocator(std::vector<QueueId> &queues);
-    std::map<std::pair<int, int>, int> linkDeficitTracker;
-    int dummyLambda;
 };
 
 } // end namespace server

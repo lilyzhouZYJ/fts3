@@ -29,6 +29,11 @@ using namespace db;
 namespace fts3 {
 namespace server {
 
+    
+// Tracks deficit on each link; incremented as links become starved of transfers
+static std::map<Pair, int> linkDeficits = std::map<Pair, int>();
+static int dummyLambda = 0;
+
 Allocator::AllocatorAlgorithm getAllocatorAlgorithm() {
     std::string allocatorConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceAllocatorAlgorithm");
     if (allocatorConfig == "MAXIMUM_FLOW") {
@@ -38,7 +43,7 @@ Allocator::AllocatorAlgorithm getAllocatorAlgorithm() {
         return Allocator::AllocatorAlgorithm::GREEDY;
     }
     else {
-        return Allocator::AllocatorAlgorithm::MAXIMUM_FLOW;
+        return Allocator::AllocatorAlgorithm::GREEDY;
     }
 }
 
@@ -51,7 +56,7 @@ Allocator::AllocatorFunction Allocator::getAllocatorFunction() {
         case Allocator::MAXIMUM_FLOW:
             // initializing lambda here for now
             // TODO: allow lambda to be configured 
-            dummyLambda = 0; 
+            // dummyLambda = 0; 
             function = &Allocator::MaximumFlowAllocator;
             break;
         default:
@@ -105,12 +110,64 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
 ){
     auto db = DBSingleton::instance().getDBObjectInstance();
     DBSingleton::instance().getDBObjectInstance()->getQueuesWithPending(queues);
+    std::map<std::string, std::list<TransferFile> > voQueues;
+
+    // Retrieve se outbound (slotsLeftForSource) and inbound (slotsLeftForDestination) capacities
     std::map<std::string, int> slotsLeftForSource, slotsLeftForDestination;
     getSourceDestinationCapacities(slotsLeftForSource, slotsLeftForDestination, queues);
     
     // Retrieve link capacities
-    std::map<std::string, std::list<TransferFile> > voQueues;
     std::map<Pair, int> linkCapacities = db->getLinkCapacities(queues, voQueues);
+
+    // Return value, to be filled as allocation proceeds
+    std::map<Pair, int> allocatorMap;
+
+    /*
+    *   Starvation avoidance: allocate all starved links before running max flow
+    */ 
+
+    // Map of starved links to their capacities
+    std::map<Pair, int> starvedLinkCapacities; 
+
+    for (const auto& i : queues) {
+        // determine if link is starved 
+        Pair currLink = Pair(i.sourceSe, i.destSe);
+        if (linkDeficits.find(currLink) != linkDeficits.end() && linkDeficits[currLink] >= dummyLambda) {
+            // keep track of which links are starved, and allocate maximum capacity (at first, to be updated below)
+            starvedLinkCapacities[currLink] = linkCapacities[currLink]; 
+        }
+    }
+
+    // create a vector of starved links and their capacities from the map starvedLinkCapacities
+    auto sortedStarvedLinks = std::vector<std::pair<Pair, int>>(starvedLinkCapacities.begin(), starvedLinkCapacities.end()); 
+    // sort the starved links in decreasing order, largest deficit first
+    auto compareLinks = [](const std::pair<Pair, int>& a, std::pair<Pair, int>& b) {
+        return a.second > b.second; 
+    };
+    std::sort(sortedStarvedLinks.begin(), sortedStarvedLinks.end(), compareLinks); 
+
+    // allocate slots for the starved links 
+    for (const auto& elem : sortedStarvedLinks) {
+        Pair link = elem.first;
+        int linkCapacity = elem.second;
+
+        // allocate maximum possible slots to this starved link 
+        int minSeCapacity = std::min(slotsLeftForSource[link.source], slotsLeftForDestination[link.destination]);
+        int numSlotsToAllocate = std::min(minSeCapacity, linkCapacity);
+        allocatorMap[link] = numSlotsToAllocate; 
+
+        // update storage elements' slots 
+        slotsLeftForSource[link.source] -= numSlotsToAllocate;
+        slotsLeftForDestination[link.destination] -= numSlotsToAllocate; 
+
+        // reset this link's deficit to 0
+        // note that deficit will later be incremented if link was not fully allocated (linkCapacities[link] < numSlotsToAllocate)
+        linkDeficits[link] = linkCapacities[link] - numSlotsToAllocate;
+    }
+
+    /*
+    *   Max flow: run maximum flow algorithm on non-starved links to maximize throughput of allocation
+    */ 
     
     // Declare graph variables
     std::map<std::string, int> seToInt;
@@ -118,11 +175,9 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
     int nodeCount = 0;
 
     MaximumFlow::MaximumFlowSolver solver;
-    std::map<Pair, int> allocatorMap;
     std::map<std::pair<int, int>, int> maximumFlow;
-    std::map<std::pair<int, int>, int> starvedLinks; 
 
-    // We initialize seToInt and intToSe since our maximum flow class utilizes array indexing for optimization
+    // Initialize seToInt and intToSe since our maximum flow class utilizes array indexing for optimization
     for (const auto& i : queues) {
         if (seToInt.find(i.sourceSe) == seToInt.end()) {
             seToInt[i.sourceSe] = nodeCount;
@@ -134,51 +189,43 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
             intToSe[nodeCount] = i.destSe;
             nodeCount++;
         }
-        // determine if link is starved 
-        std::pair<int, int> currLink = std::make_pair(seToInt[i.sourceSe], seToInt[i.destSe]);
-        if (linkDeficitTracker.find(currLink) != linkDeficitTracker.end() && linkDeficitTracker[currLink] >= dummyLambda) {
-            // keep track of which links are starved, and allocate maximum capacity (at first, to be updated below)
-            starvedLinks[currLink] = linkCapacities[currLink]; 
-        }
     }
-    // create a vector of starved links from the map
-    std::vector<std::pair<std::pair<int, int>, int>> sortedStarvedLinks(starvedLinks.begin(), starvedLinks.end()); 
-    auto compareLinks = [](const std::pair<std::pair<int, int>, int>& a, std::pair<std::pair<int, int>, int>& b) {
-        return a.second > b.second; 
-    }
-    // sort the starved links in decreasing order 
-    std::sort(sortedStarvedLinks.begin(), sortedStarvedLinks.end(), compareLinks); 
-    // allocate slots for the starved links 
-    for (const auto& elem : sortedStarvedLinks) {
-        // allocate slots to given link 
-        int minCapacityStorageElements = min(slotsLeftForSource[elem.first.first], slotsLeftForDestination[elem.first.second]);
-        int allocated = min(minCapacityStorageElements, elem.second);
-        allocatorMap[elem.first] = allocated; 
-        // update storage elements' slots 
-        slotsLeftForSource[elem.first.first] -= allocated;
-        slotsLeftForDestination[elem.first.second] -= allocated; 
-        // update deficit tracker 
-        linkDeficitTracker[elem.first] = linkCapacities[elem.first] - allocated;
-    }
-    // node count is incremented after each node so virtual source is nodeCount, dest is nodeCount + 1
+
+    // node count is incremented after each node is added so virtual source is nodeCount, dest is nodeCount + 1
     solver.setSource(nodeCount);
     solver.setSink(nodeCount + 1);
     solver.setNodes(nodeCount + 2);
+
     // Introduce capacities for virtual source to each source
     for (const auto& i : queues) {
-        // if the link isn't starved, add it to the graph
-        if (starvedLinks.find(std::make_pair(i.sourceSe, i.destSe)) == starvedLinks.end()) {
-            solver.addEdge(nodeCount, seToInt[i.sourceSe], slotsLeftForSource[i.sourceSe]);
-            solver.addEdge(seToInt[i.destSe], nodeCount + 1, slotsLeftForDestination[i.destSe]);
-            solver.addEdge(seToInt[i.sourceSe], seToInt[i.destSe], linkCapacities[Pair(i.sourceSe, i.destSe)]);
+        int sourceSlots = slotsLeftForSource[i.sourceSe];
+        int destSlots = slotsLeftForDestination[i.destSe];
+        int linkSlots = linkCapacities[Pair(i.sourceSe, i.destSe)];
+
+        // Reduce graph size by excluding links where the source, destination, or link itself has no slots left, 
+        // and starved links which have already been fully allocated
+        if (sourceSlots > 0 && destSlots > 0 && linkSlots > 0) {
+            solver.addEdge(nodeCount, seToInt[i.sourceSe], sourceSlots);
+            solver.addEdge(seToInt[i.destSe], nodeCount + 1, destSlots);
+            solver.addEdge(seToInt[i.sourceSe], seToInt[i.destSe], linkSlots);
         }
     }
     
     maximumFlow = solver.computeMaximumFlow();
     
     for (const auto& entry : maximumFlow) {
-        allocatorMap[Pair(intToSe[entry.first.first], intToSe[entry.first.second])] = entry.second;
+        Pair link = Pair(intToSe[entry.first.first], intToSe[entry.first.second]);
+        int numSlotsToAllocate = entry.second;
+        allocatorMap[link] = numSlotsToAllocate;
     }
+
+    // for each allocated link, increment deficit by difference in capacity and allocated flow
+    for (const auto& entry : allocatorMap) {
+        Pair link = entry.first;
+        int numSlotsToAllocate = entry.second;
+        linkDeficits[link] += (linkCapacities[link] - numSlotsToAllocate);
+    }
+
     return allocatorMap;
 }
 

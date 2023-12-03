@@ -30,7 +30,6 @@
 #include "Allocator.h"
 #include "Scheduler.h"
 
-
 namespace fts3 {
 namespace server {
 
@@ -54,7 +53,7 @@ protected:
     std::string logDir;
     std::string msgDir;
     boost::posix_time::time_duration schedulingInterval;
-    Allocator::AllocatorFunction allocatorAlgorithm;
+    Allocator::AllocatorFunction allocatorFunction;
 
     // Function pointer for the scheduler function, depending on config
     Scheduler::SchedulerFunction schedulerFunction;
