@@ -45,13 +45,15 @@ public:
     // Function pointer to the scheduler algorithm
     using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&, int);
 
-    // Returns function pointer to the scheduler algorithm
-    static SchedulerFunction getSchedulerFunction();
-
     // Stores deficits of queues
     static std::map<VoName, std::map<ActivityName, int>> allQueueDeficits;
 
-private:
+    // Returns the scheduling algorithm based on the config
+    static SchedulerAlgorithm getSchedulerAlgorithm();
+
+    // Returns function pointer to the scheduler algorithm
+    static SchedulerFunction getSchedulerFunction();
+
     // The scheduling functions below should execute the corresponding
     // scheduling algorithm, and they should return a mapping from
     // VOs to the list of TransferFiles to be scheduled by TransferService.
@@ -77,43 +79,45 @@ private:
     static std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
 
     /* Helper functions */
-    
+
     /**
      * Compute the number of active transfers for each activity in each vo for the pair.
      * @param src Source node
      * @param dest Destination node
-     * @param voActivityShare Maps each VO to a mapping between each of its activities to the activity's weight
+     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight
     */
     static std::map<VoName, std::map<ActivityName, long long>> computeActiveCounts(
         std::string src,
         std::string dest,
-        std::map<std::string, std::map<std::string, double>> &voActivityShare
+        std::map<std::string, std::map<std::string, double>> &voActivityWeights
     );
 
     /**
      * Compute the number of submitted transfers for each activity in each vo for the pair.
      * @param src Source node
      * @param dest Destination node
-     * @param voActivityShare Maps each VO to a mapping between each of its activities to the activity's weight
+     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight
     */
     static std::map<VoName, std::map<ActivityName, long long>> computeSubmittedCounts(
         std::string src,
         std::string dest,
-        std::map<std::string, std::map<std::string, double>> &voActivityShare
+        std::map<std::string, std::map<std::string, double>> &voActivityWeights
     );
 
     /**
      * Compute the number of should-be-allocated slots.
      * @param p Pair of src-dest nodes.
      * @param maxPairSlots Max number of slots given to the pair, as determined by allocator.
-     * @param voActivityShare Maps each VO to a mapping between each of its activities to the activity's weight.
+     * @param voWeights Maps each VO in this pair to the VO's weight.
+     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight.
      * @param queueActiveCounts Maps each VO to a mapping between each of its activities to the activity's number of active slots.
      * @param queueSubmittedCounts Maps each VO to a mapping between each of its activities to the activity's number of submitted slots.
     */
     static std::map<VoName, std::map<ActivityName, int>> computeShouldBeSlots(
         const Pair &p,
         int maxPairSlots,
-        std::map<VoName, std::map<ActivityName, double>> &voActivityShare,
+        std::map<VoName, double> &voWeights,
+        std::map<VoName, std::map<ActivityName, double>> &voActivityWeights,
         std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
         std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
     );
@@ -197,6 +201,7 @@ private:
         std::map<VoName, std::list<TransferFile>>& scheduledFiles
     );
 
+private:
     /**
      * Transfers in unschedulable queues must be set to fail.
      * @param[out] unschedulable    List of unschedulable transfers.

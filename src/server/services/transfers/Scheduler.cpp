@@ -32,7 +32,7 @@ namespace server {
 
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::allQueueDeficits = std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>>();
 
-Scheduler::SchedulerAlgorithm getSchedulerAlgorithm() {
+Scheduler::SchedulerAlgorithm Scheduler::getSchedulerAlgorithm() {
     std::string schedulerConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceSchedulingAlgorithm");
     if (schedulerConfig == "RANDOMIZED") {
         return Scheduler::SchedulerAlgorithm::RANDOMIZED;
@@ -47,7 +47,7 @@ Scheduler::SchedulerAlgorithm getSchedulerAlgorithm() {
 
 Scheduler::SchedulerFunction Scheduler::getSchedulerFunction() {
     Scheduler::SchedulerFunction function;
-    switch (getSchedulerAlgorithm()) {
+    switch (Scheduler::getSchedulerAlgorithm()) {
         case Scheduler::RANDOMIZED:
             function = &Scheduler::doRandomizedSchedule;
             break;
@@ -104,19 +104,19 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     if (queues.empty())
         return scheduledFiles;
 
-    // (1) For each VO, fetch activity share.
+    // (1) For each VO, fetch activity weights.
     //     We do this here because this produces a mapping between each vo and all activities in that vo,
     //     which we need for later steps. Hence this reduces redundant queries into the database.
-    //     The activity share of each VO also does not depend on the pair, hence does not need to go into the loop below.
-    std::map<std::string, std::map<std::string, double>> voActivityShare;
+    //     The activity weight of each VO also does not depend on the pair, hence does not need to go into the loop below.
+    std::map<VoName, std::map<ActivityName, double>> voActivityWeights;
     for (auto i = queues.begin(); i != queues.end(); i++) {
-        if (voActivityShare.count(i->voName) > 0) {
-            // VO already exists in voActivityShare; don't need to fetch again
+        if (voActivityWeights.count(i->voName) > 0) {
+            // VO already exists in voActivityWeights; don't need to fetch again
             continue;
         }
-        // Fetch activity share for that VO
-        std::map<std::string, double> activityShare = DBSingleton::instance().getDBObjectInstance()->getActivityShareForVo(i->voName);
-        voActivityShare[i->voName] = activityShare;
+        // Fetch activity weights for that VO
+        std::map<ActivityName, double> activityWeights = DBSingleton::instance().getDBObjectInstance()->getActivityShareForVo(i->voName);
+        voActivityWeights[i->voName] = activityWeights;
     }
 
     // For each link, compute deficit of its queues and perform scheduling
@@ -124,23 +124,31 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
         const Pair p = i->first;
         const int maxSlots = i->second;
 
-        // (2) Compute the number of active / submitted transfers for each activity in each vo,
+        // (2) Fetch weights of all vo's in this pair.
+        //     This is needed to compute should-be-allocated slots.
+        std::map<VoName, double> voWeights;
+        std::vector<ShareConfig> shares = DBSingleton::instance().getDBObjectInstance()->getShareConfig(p.source, p.destination);
+        for (auto j = shares.begin(); j != shares.end(); j++) {
+            voWeights[j->vo] = j->weight;
+        }
+
+        // (3) Compute the number of active / submitted transfers for each activity in each vo,
         //     as well as the number of pending (submitted) transfers for each activity in each vo.
         //     We do this here because we need this for computing should-be-allocated slots.
-        std::map<VoName, std::map<ActivityName, long long>> queueActiveCounts = computeActiveCounts(p.source, p.destination, voActivityShare);
-        std::map<VoName, std::map<ActivityName, long long>> queueSubmittedCounts = computeSubmittedCounts(p.source, p.destination, voActivityShare);
+        std::map<VoName, std::map<ActivityName, long long>> queueActiveCounts = computeActiveCounts(p.source, p.destination, voActivityWeights);
+        std::map<VoName, std::map<ActivityName, long long>> queueSubmittedCounts = computeSubmittedCounts(p.source, p.destination, voActivityWeights);
 
-        // (3) Compute the number of should-be-allocated slots.
+        // (4) Compute the number of should-be-allocated slots.
         std::map<VoName, std::map<ActivityName, int>> queueShouldBeAllocated = computeShouldBeSlots(
-            p, maxSlots,
-            voActivityShare,
+            p, maxSlots, voWeights,
+            voActivityWeights,
             queueActiveCounts,
             queueSubmittedCounts);
 
-        // (4) Compute deficit; this will update allQueueDeficits.
+        // (5) Compute deficit; this will update allQueueDeficits.
         computeDeficits(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-        // (5) Store deficit into priority queue.
+        // (6) Store deficit into priority queue.
         std::priority_queue<std::tuple<int, VoName, ActivityName>> deficitPq;
 
         for (auto j = allQueueDeficits.begin(); j != allQueueDeficits.end(); j++) {
@@ -157,11 +165,11 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
             }
         }
 
-        // (6) Assign available slots to queues using the priority queue.
+        // (7) Assign available slots to queues using the priority queue.
         std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts = assignSlotsUsingDeficit(
             maxSlots, deficitPq, queueActiveCounts, queueSubmittedCounts);
 
-        // (7) Fetch TransferFiles based on the number of slots assigned to each queue.
+        // (8) Fetch TransferFiles based on the number of slots assigned to each queue.
         getTransferFilesBasedOnSlots(p, assignedSlotCounts, scheduledFiles);
     }
 
@@ -251,12 +259,12 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Scheduler::computeActiveCounts(
     std::string src,
     std::string dest,
-    std::map<VoName, std::map<ActivityName, double>> &voActivityShare
+    std::map<VoName, std::map<ActivityName, double>> &voActivityWeights
 ){
     auto db = DBSingleton::instance().getDBObjectInstance(); // TODO: fix repeated db
     std::map<VoName, std::map<ActivityName, long long>> result;
 
-    for (auto i = voActivityShare.begin(); i != voActivityShare.end(); i++) {
+    for (auto i = voActivityWeights.begin(); i != voActivityWeights.end(); i++) {
         VoName voName = i->first;
         result[voName] = db->getActiveCountForEachActivity(src, dest, voName);
     }
@@ -267,12 +275,12 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Schedu
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Scheduler::computeSubmittedCounts(
     std::string src,
     std::string dest,
-    std::map<VoName, std::map<ActivityName, double>> &voActivityShare
+    std::map<VoName, std::map<ActivityName, double>> &voActivityWeights
 ){
     auto db = DBSingleton::instance().getDBObjectInstance(); // TODO: fix repeated db
     std::map<VoName, std::map<ActivityName, long long>> result;
 
-    for (auto i = voActivityShare.begin(); i != voActivityShare.end(); i++) {
+    for (auto i = voActivityWeights.begin(); i != voActivityWeights.end(); i++) {
         VoName voName = i->first;
         result[voName] = db->getSubmittedCountInActivity(src, dest, voName);
     }
@@ -283,7 +291,8 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Schedu
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::computeShouldBeSlots(
     const Pair &p,
     int maxPairSlots,
-    std::map<VoName, std::map<ActivityName, double>> &voActivityShare,
+    std::map<VoName, double> &voWeights,
+    std::map<VoName, std::map<ActivityName, double>> &voActivityWeights,
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
@@ -291,22 +300,15 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::c
 
     std::map<VoName, std::map<ActivityName, int>> result;
 
-    // (1) Fetch weights of all vo's in that pair
-    std::vector<ShareConfig> shares = DBSingleton::instance().getDBObjectInstance()->getShareConfig(p.source, p.destination);
-    std::map<VoName, double> voWeights;
-    for (auto j = shares.begin(); j != shares.end(); j++) {
-        voWeights[j->vo] = j->weight;
-    }
-
-    // (2) Assign slots to vo's
+    // (1) Assign slots to vo's
     std::map<VoName, int> voShouldBeSlots = assignShouldBeSlotsToVos(voWeights, maxPairSlots, queueActiveCounts, queueSubmittedCounts);
 
-    // (3) Assign slots of each vo to its activities
+    // (2) Assign slots of each vo to its activities
     for (auto j = voShouldBeSlots.begin(); j != voShouldBeSlots.end(); j++) {
         VoName voName = j->first;
         int voMaxSlots = j->second;
 
-        std::map<ActivityName, int> activityShouldBeSlots = assignShouldBeSlotsToActivities(voActivityShare[voName], voMaxSlots, queueActiveCounts[voName], queueSubmittedCounts[voName]);
+        std::map<ActivityName, int> activityShouldBeSlots = assignShouldBeSlotsToActivities(voActivityWeights[voName], voMaxSlots, queueActiveCounts[voName], queueSubmittedCounts[voName]);
 
         // Add to result
         for (auto k = activityShouldBeSlots.begin(); k != activityShouldBeSlots.end(); k++) {
