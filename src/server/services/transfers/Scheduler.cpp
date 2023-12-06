@@ -140,7 +140,8 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
 
         // (4) Compute the number of should-be-allocated slots.
         std::map<VoName, std::map<ActivityName, int>> queueShouldBeAllocated = computeShouldBeSlots(
-            p, maxSlots, voWeights,
+            maxSlots,
+            voWeights,
             voActivityWeights,
             queueActiveCounts,
             queueSubmittedCounts);
@@ -289,7 +290,6 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Schedu
 }
 
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::computeShouldBeSlots(
-    const Pair &p,
     int maxPairSlots,
     std::map<VoName, double> &voWeights,
     std::map<VoName, std::map<ActivityName, double>> &voActivityWeights,

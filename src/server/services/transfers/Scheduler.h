@@ -105,8 +105,7 @@ public:
     );
 
     /**
-     * Compute the number of should-be-allocated slots.
-     * @param p Pair of src-dest nodes.
+     * Compute the number of should-be-allocated slots for each queue in a given pair.
      * @param maxPairSlots Max number of slots given to the pair, as determined by allocator.
      * @param voWeights Maps each VO in this pair to the VO's weight.
      * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight.
@@ -114,7 +113,6 @@ public:
      * @param queueSubmittedCounts Maps each VO to a mapping between each of its activities to the activity's number of submitted slots.
     */
     static std::map<VoName, std::map<ActivityName, int>> computeShouldBeSlots(
-        const Pair &p,
         int maxPairSlots,
         std::map<VoName, double> &voWeights,
         std::map<VoName, std::map<ActivityName, double>> &voActivityWeights,
