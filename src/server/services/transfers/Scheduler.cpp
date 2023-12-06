@@ -34,6 +34,8 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
 
 Scheduler::SchedulerAlgorithm Scheduler::getSchedulerAlgorithm() {
     std::string schedulerConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceSchedulingAlgorithm");
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: TransfersServiceSchedulingAlgorithm is " << schedulerConfig << "(lzhou)" << commit;
+
     if (schedulerConfig == "RANDOMIZED") {
         return Scheduler::SchedulerAlgorithm::RANDOMIZED;
     }
@@ -68,6 +70,8 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doRandomizedSche
     std::vector<QueueId> &queues, 
     int availableUrlCopySlots
 ){
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in doRandomizedSchedule (lzhou)" << commit;
+    
     std::map<VoName, std::list<TransferFile> > scheduledFiles;
     std::vector<QueueId> unschedulable;
 
@@ -80,15 +84,14 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doRandomizedSche
     if (queues.empty())
         return scheduledFiles;
 
-    auto db = DBSingleton::instance().getDBObjectInstance();
-
     time_t start = time(0);
-    db->getReadyTransfers(queues, scheduledFiles, slotsPerLink); // TODO: move this out of db?
-    time_t end =time(0);
+    DBSingleton::instance().getDBObjectInstance()->getReadyTransfers(queues, scheduledFiles, slotsPerLink);
+    time_t end = time(0);
     FTS3_COMMON_LOGGER_NEWLOG(INFO) << "DBtime=\"TransfersService\" "
                                     << "func=\"doRandomizedSchedule\" "
                                     << "DBcall=\"getReadyTransfers\" " 
                                     << "time=\"" << end - start << "\"" 
+                                    << "(lzhou)"
                                     << commit;
 
     return scheduledFiles;
@@ -99,6 +102,9 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     std::vector<QueueId> &queues, 
     int availableUrlCopySlots
 ){
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in doDeficitSchedule (lzhou)" << commit;
+
+    auto db = DBSingleton::instance().getDBObjectInstance();
     std::map<VoName, std::list<TransferFile>> scheduledFiles;
 
     if (queues.empty())
@@ -108,26 +114,21 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     //     We do this here because this produces a mapping between each vo and all activities in that vo,
     //     which we need for later steps. Hence this reduces redundant queries into the database.
     //     The activity weight of each VO also does not depend on the pair, hence does not need to go into the loop below.
-    std::map<VoName, std::map<ActivityName, double>> voActivityWeights;
-    for (auto i = queues.begin(); i != queues.end(); i++) {
-        if (voActivityWeights.count(i->voName) > 0) {
-            // VO already exists in voActivityWeights; don't need to fetch again
-            continue;
-        }
-        // Fetch activity weights for that VO
-        std::map<ActivityName, double> activityWeights = DBSingleton::instance().getDBObjectInstance()->getActivityShareForVo(i->voName);
-        voActivityWeights[i->voName] = activityWeights;
-    }
-
+    std::map<VoName, std::map<ActivityName, double>> voActivityWeights = getActivityWeights(queues);
+    
     // For each link, compute deficit of its queues and perform scheduling
     for (auto i = slotsPerLink.begin(); i != slotsPerLink.end(); i++) {
         const Pair p = i->first;
         const int maxSlots = i->second;
 
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduling for (src=" << p.source << ", dst=" << p.destination << "), "
+                                        << "maxSlots for the pair is " << maxSlots << " "
+                                        << "(lzhou)" << commit;
+
         // (2) Fetch weights of all vo's in this pair.
         //     This is needed to compute should-be-allocated slots.
         std::map<VoName, double> voWeights;
-        std::vector<ShareConfig> shares = DBSingleton::instance().getDBObjectInstance()->getShareConfig(p.source, p.destination);
+        std::vector<ShareConfig> shares = db->getShareConfig(p.source, p.destination);
         for (auto j = shares.begin(); j != shares.end(); j++) {
             voWeights[j->vo] = j->weight;
         }
@@ -137,6 +138,20 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
         //     We do this here because we need this for computing should-be-allocated slots.
         std::map<VoName, std::map<ActivityName, long long>> queueActiveCounts = computeActiveCounts(p.source, p.destination, voActivityWeights);
         std::map<VoName, std::map<ActivityName, long long>> queueSubmittedCounts = computeSubmittedCounts(p.source, p.destination, voActivityWeights);
+
+        for (auto j = queueActiveCounts.begin(); j != queueActiveCounts.end(); j++) {
+            VoName voName = j->first;
+            for (auto k = j->second.begin(); k != j->second.end(); k++) {
+                ActivityName activityName = k->first;
+                long long activeCount = queueActiveCounts[voName][activityName];
+                long long submittedCount = queueSubmittedCounts[voName][activityName];
+                FTS3_COMMON_LOGGER_NEWLOG(INFO) << "queue[vo=" << voName << "]"
+                                                << "[activity=" << activityName << "]: "
+                                                << "active = " << activeCount << ", "
+                                                << "submitted = " << submittedCount << " "
+                                                << "(lzhou)" << commit;
+            }
+        }
 
         // (4) Compute the number of should-be-allocated slots.
         std::map<VoName, std::map<ActivityName, int>> queueShouldBeAllocated = computeShouldBeSlots(
@@ -160,12 +175,40 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     return scheduledFiles;
 }
 
+std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, double>> Scheduler::getActivityWeights(std::vector<QueueId> &queues)
+{
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in getActivityWeights (lzhou)" << commit;
+
+    std::map<VoName, std::map<ActivityName, double>> voActivityWeights;
+    auto db = DBSingleton::instance().getDBObjectInstance();
+
+    for (auto i = queues.begin(); i != queues.end(); i++) {
+        if (voActivityWeights.count(i->voName) > 0) {
+            // VO already exists in voActivityWeights; don't need to fetch again
+            continue;
+        }
+        // Fetch activity weights for that VO
+        std::map<ActivityName, double> activityWeights = db->getActivityShareForVo(i->voName);
+        voActivityWeights[i->voName] = activityWeights;
+
+        for (auto j = activityWeights.begin(); j != activityWeights.end(); j++) {
+            ActivityName activityName = j->first;
+            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "activityWeights[vo=" << i->voName << "]"
+                                            << "[activity=" << activityName << "]"
+                                            << " = " << activityWeights[i->voName][activityName] << " "
+                                            << "(lzhou)" << commit;
+        }
+    }
+
+    return voActivityWeights;
+}
+
 void Scheduler::getTransferFilesBasedOnSlots(
     Pair pair,
     std::map<VoName, std::map<ActivityName, int>>& assignedSlotCounts,
     std::map<VoName, std::list<TransferFile>>& scheduledFiles
 ){
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: get TransferFiles based on slots assigned" << commit;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in getTransferFilesBasedOnSlots (lzhou)" << commit;
 
     auto db = DBSingleton::instance().getDBObjectInstance();
 
@@ -185,7 +228,12 @@ void Scheduler::getTransferFilesBasedOnSlots(
                                         << "func=\"getTransferFilesBasedOnSlots\" "
                                         << "DBcall=\"getTransferFilesForVo\" " 
                                         << "time=\"" << end - start << "\"" 
+                                        << "(lzhou)"
                                         << commit;
+
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "scheduledFiles[vo=" << voName << "]"
+                                        << " has " << scheduledFiles[voName].size() << "files "
+                                        << "(lzhou)" << commit;
     }
 }
 
@@ -194,7 +242,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: assign slots using priority queue of deficits" << commit;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in assignSlotsUsingDeficitPriorityQueue (lzhou)" << commit;
 
     std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts;
 
@@ -224,6 +272,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         }
     }
     int availableSlots = maxSlots - totalActiveCount;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Actual available slots (maxSlots-totalActiveSlots) = " << availableSlots << " (lzhou)" << commit;
 
     if (availableSlots <= 0) {
         // No more available slots to assign
@@ -234,6 +283,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
     for (int i = 0; i < availableSlots; i++) {
         if (deficitPq.empty()) {
             // No more queues with pending transfers
+            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "No more pending queues, exit scheduling (lzhou)" << commit;
             break;
         }
 
@@ -243,6 +293,12 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         int deficit = std::get<0>(nextPqElement);
         VoName voName = std::get<1>(nextPqElement);
         ActivityName activityName = std::get<2>(nextPqElement);
+
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Assign a slot to next queue: "
+                                        << "vo=" << voName << " "
+                                        << "activity=" << activityName << " "
+                                        << "deficit=" << deficit << " "
+                                        << "(lzhou)" << commit;
 
         // (ii) Assign a slot to this queue.
         if (assignedSlotCounts.find(voName) == assignedSlotCounts.end() || assignedSlotCounts[voName].find(activityName) == assignedSlotCounts[voName].end()) {
@@ -257,6 +313,17 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         }
     }
 
+    for (auto i = assignedSlotCounts.begin(); i != assignedSlotCounts.end(); i++) {
+        VoName voName = i->first;
+        for (auto j = i->second.begin(); j != i->second.end(); j++) {
+            ActivityName activityName = j->first;
+            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "assignedSlotCounts[vo=" << voName << "]"
+                                            << "[activity=" << activityName << "]"
+                                            << " = " << assignedSlotCounts[voName][activityName] << " "
+                                            << "(lzhou)" << commit;
+        }
+    }
+
     return assignedSlotCounts;
 }
 
@@ -265,7 +332,9 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Schedu
     std::string dest,
     std::map<VoName, std::map<ActivityName, double>> &voActivityWeights
 ){
-    auto db = DBSingleton::instance().getDBObjectInstance(); // TODO: fix repeated db
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeActiveCounts (lzhou)" << commit;
+
+    auto db = DBSingleton::instance().getDBObjectInstance();
     std::map<VoName, std::map<ActivityName, long long>> result;
 
     for (auto i = voActivityWeights.begin(); i != voActivityWeights.end(); i++) {
@@ -281,7 +350,9 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Schedu
     std::string dest,
     std::map<VoName, std::map<ActivityName, double>> &voActivityWeights
 ){
-    auto db = DBSingleton::instance().getDBObjectInstance(); // TODO: fix repeated db
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeSubmittedCounts (lzhou)" << commit;
+
+    auto db = DBSingleton::instance().getDBObjectInstance();
     std::map<VoName, std::map<ActivityName, long long>> result;
 
     for (auto i = voActivityWeights.begin(); i != voActivityWeights.end(); i++) {
@@ -299,7 +370,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::c
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: computing should-be-allocated slots" << commit;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeShouldBeSlots (lzhou)" << commit;
 
     std::map<VoName, std::map<ActivityName, int>> result;
 
@@ -319,6 +390,10 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::c
             int activitySlots = k->second;
 
             result[voName][activityName] = activitySlots;
+            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "shouldBeSlots[vo=" << voName << "]"
+                                            << "[activity=" << activityName << "]"
+                                            << " = " << result[voName][activityName] << " "
+                                            << "(lzhou)" << commit;
         }
     }
 
@@ -459,6 +534,8 @@ void Scheduler::computeDeficits(
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeDeficits (lzhou)" << commit;
+
     std::map<VoName, std::map<ActivityName, int>> &deficits = Scheduler::allQueueDeficits;
 
     for (auto i = queueActiveCounts.begin(); i != queueActiveCounts.end(); i++) {
@@ -479,6 +556,11 @@ void Scheduler::computeDeficits(
                 }
                 deficits[voName][activityName] += shouldBeAllocatedCount - activeCount;
             }
+
+            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "deficit[vo=" << voName << "]"
+                                            << "[activity=" << activityName << "]"
+                                            << " = " << deficits[voName][activityName] << " "
+                                            << "(lzhou)" << commit;
         }
     }
 }

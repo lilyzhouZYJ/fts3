@@ -198,6 +198,13 @@ public:
     );
 
 private:
+
+    /**
+     * Fetch from the database the activity weights.
+     * @param queues All current pending transfers
+    */
+    static std::map<VoName, std::map<ActivityName, double>> getActivityWeights(std::vector<QueueId> &queues);
+
     /**
      * Transfers in unschedulable queues must be set to fail.
      * @param[out] unschedulable    List of unschedulable transfers.
