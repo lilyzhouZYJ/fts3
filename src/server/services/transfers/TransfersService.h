@@ -58,8 +58,13 @@ protected:
     // Function pointer for the scheduler function, depending on config
     Scheduler::SchedulerFunction schedulerFunction;
 
-    void executeFileTransfers(std::map<std::string, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots, std::vector<QueueId> queues);
-    void getFiles(const std::vector<QueueId>& queues, int availableUrlCopySlots);
+    /**
+     * Execute the file transfers.
+     * @param scheduledFiles A map from each VO to the scheduled TransferFiles, as determined by the Scheduler
+     * @param availableUrlCopySlots Total number of available transfer slots
+    */
+    void executeFileTransfers(std::map<Scheduler::VoName, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots);
+
     void executeUrlcopy();
 };
 

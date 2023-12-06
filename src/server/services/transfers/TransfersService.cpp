@@ -102,39 +102,11 @@ void TransfersService::runService()
     }
 }
 
-/**
- * Execute the file transfer.
- * (This was originally in getFiles.)
- * This is also where we consider the slots left for dest and src nodes.
- * TODO: The Allocator already takes into consideration slotsLeftForDestination and slotsLeftForSource.
- *       The code here will be modified in the future to remove redundancy.
- *       For now this function will keep the same code as the original getFiles() to ensure correctness.
-*/
 void TransfersService::executeFileTransfers(
     std::map<std::string, std::list<TransferFile>> scheduledFiles, 
-    int availableUrlCopySlots,
-    std::vector<QueueId> queues
+    int availableUrlCopySlots
 ){
-    auto db = DBSingleton::instance().getDBObjectInstance();
-
     ThreadPool<FileTransferExecutor> execPool(execPoolSize);
-    std::map<std::string, int> slotsLeftForSource, slotsLeftForDestination;
-    for (auto i = queues.begin(); i != queues.end(); ++i) {
-        // To reduce queries, fill in one go limits as source and as destination
-        if (slotsLeftForDestination.count(i->destSe) == 0) {
-            StorageConfig seConfig = db->getStorageConfig(i->destSe);
-            slotsLeftForDestination[i->destSe] = seConfig.inboundMaxActive>0?seConfig.inboundMaxActive:60;
-            slotsLeftForSource[i->destSe] = seConfig.outboundMaxActive>0?seConfig.outboundMaxActive:60;
-        }
-        if (slotsLeftForSource.count(i->sourceSe) == 0) {
-            StorageConfig seConfig = db->getStorageConfig(i->sourceSe);
-            slotsLeftForDestination[i->sourceSe] = seConfig.inboundMaxActive>0?seConfig.inboundMaxActive:60;
-            slotsLeftForSource[i->sourceSe] = seConfig.outboundMaxActive>0?seConfig.outboundMaxActive:60;
-        }
-        // Once it is filled, decrement
-        slotsLeftForDestination[i->destSe] -= i->activeCount;
-        slotsLeftForSource[i->sourceSe] -= i->activeCount;
-    }
 
     try 
     {
@@ -186,34 +158,15 @@ void TransfersService::executeFileTransfers(
                     proxies[proxy_key] = DelegCred::getProxyFile(tf.userDn, tf.credId);
                 }
 
-                if (slotsLeftForDestination[tf.destSe] <= 0) {
-                    if (warningPrintedDst.count(tf.destSe) == 0) {
-                        FTS3_COMMON_LOGGER_NEWLOG(WARNING)
-                            << "Reached limitation for destination " << tf.destSe
-                            << commit;
-                        warningPrintedDst.insert(tf.destSe);
-                    }
-                }
-                else if (slotsLeftForSource[tf.sourceSe] <= 0) {
-                    if (warningPrintedSrc.count(tf.sourceSe) == 0) {
-                        FTS3_COMMON_LOGGER_NEWLOG(WARNING)
-                            << "Reached limitation for source " << tf.sourceSe
-                            << commit;
-                        warningPrintedSrc.insert(tf.sourceSe);
-                    }
-                } else {
-                    // Increment scheduled transfers by activity
-                    scheduledByActivity[tf.activity]++;
+                // Increment scheduled transfers by activity
+                scheduledByActivity[tf.activity]++;
 
-                    FileTransferExecutor *exec = new FileTransferExecutor(tf,
-                        monitoringMessages, infosys, ftsHostName,
-                        proxies[proxy_key], logDir, msgDir);
+                FileTransferExecutor *exec = new FileTransferExecutor(tf,
+                    monitoringMessages, infosys, ftsHostName,
+                    proxies[proxy_key], logDir, msgDir);
 
-                    execPool.start(exec);
-                    --availableUrlCopySlots;
-                    --slotsLeftForDestination[tf.destSe];
-                    --slotsLeftForSource[tf.sourceSe];
-                }
+                execPool.start(exec);
+                --availableUrlCopySlots;
             }
         }
 
@@ -293,10 +246,10 @@ void TransfersService::executeUrlcopy()
         }
 
         std::map<Pair, int> slotsPerLink = allocatorFunction(queues); 
-        std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues, availableUrlCopySlots);
+        std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
 
         // Execute file transfers
-        executeFileTransfers(scheduledFiles, availableUrlCopySlots, queues);
+        executeFileTransfers(scheduledFiles, availableUrlCopySlots);
         
         time_t end = time(0); //std::chrono::system_clock::now();
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "DBtime=\"TransfersService\" "

@@ -43,7 +43,7 @@ public:
     using ActivityName = std::string;
 
     // Function pointer to the scheduler algorithm
-    using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&, int);
+    using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&);
 
     // Stores deficits of queues
     static std::map<VoName, std::map<ActivityName, int>> allQueueDeficits;
@@ -62,21 +62,17 @@ public:
      * Run scheduling using weighted randomization.
      * @param slotsPerLink number of slots assigned to each link, as determined by allocator
      * @param queues All current pending transfers
-     * @param availableUrlCopySlots Max number of slots available in the system
-     * TODO: can remove availableUrlCopySlots
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    static std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
+    static std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
 
     /**
      * Run deficit-based priority queueing scheduling.
      * @param slotsPerLink number of slots assigned to each link, as determined by allocator
      * @param queues All current pending transfers
-     * @param availableUrlCopySlots Max number of slots available in the system
-     * TODO: can remove availableUrlCopySlots
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    static std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues, int availableUrlCopySlots);
+    static std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
 
     /* Helper functions */
 
@@ -198,6 +194,13 @@ public:
     );
 
 private:
+
+    /**
+     * Fetch from the database the activity weights.
+     * @param queues All current pending transfers
+    */
+    static std::map<VoName, std::map<ActivityName, double>> getActivityWeights(std::vector<QueueId> &queues);
+
     /**
      * Transfers in unschedulable queues must be set to fail.
      * @param[out] unschedulable    List of unschedulable transfers.
