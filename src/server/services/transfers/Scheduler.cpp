@@ -149,28 +149,11 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
         // (5) Compute deficit; this will update allQueueDeficits.
         computeDeficits(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-        // (6) Store deficit into priority queue.
-        std::priority_queue<std::tuple<int, VoName, ActivityName>> deficitPq;
+        // (6) Assign available slots to queues using a priority queue of deficits.
+        std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts = assignSlotsUsingDeficitPriorityQueue(
+            maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-        for (auto j = allQueueDeficits.begin(); j != allQueueDeficits.end(); j++) {
-            VoName voName = j->first;
-            std::map<ActivityName, int> activityDeficits = j->second;
-            for (auto k = activityDeficits.begin(); k != activityDeficits.end(); k++) {
-                ActivityName activityName = k->first;
-                int deficit = k->second;
-
-                // Only include a queue in priority queue if the queue has pending transfers.
-                if (queueSubmittedCounts[voName][activityName] > 0) {
-                    deficitPq.push(std::make_tuple(deficit, voName, activityName));
-                }
-            }
-        }
-
-        // (7) Assign available slots to queues using the priority queue.
-        std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts = assignSlotsUsingDeficit(
-            maxSlots, deficitPq, queueActiveCounts, queueSubmittedCounts);
-
-        // (8) Fetch TransferFiles based on the number of slots assigned to each queue.
+        // (7) Fetch TransferFiles based on the number of slots assigned to each queue.
         getTransferFilesBasedOnSlots(p, assignedSlotCounts, scheduledFiles);
     }
 
@@ -182,6 +165,8 @@ void Scheduler::getTransferFilesBasedOnSlots(
     std::map<VoName, std::map<ActivityName, int>>& assignedSlotCounts,
     std::map<VoName, std::list<TransferFile>>& scheduledFiles
 ){
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: get TransferFiles based on slots assigned" << commit;
+
     auto db = DBSingleton::instance().getDBObjectInstance();
 
     for (auto i = assignedSlotCounts.begin(); i != assignedSlotCounts.end(); i++) {
@@ -204,15 +189,33 @@ void Scheduler::getTransferFilesBasedOnSlots(
     }
 }
 
-std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::assignSlotsUsingDeficit(
+std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::assignSlotsUsingDeficitPriorityQueue(
     int maxSlots,
-    std::priority_queue<std::tuple<int, VoName, ActivityName>>& deficitPq,
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: assign slots using priority queue of deficits" << commit;
+
     std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts;
 
-    // (1) Compute how many slots are actually available to this link after excluding active transfers.
+    // (1) Store deficit into priority queue.
+    std::priority_queue<std::tuple<int, VoName, ActivityName>> deficitPq;
+
+    for (auto j = Scheduler::allQueueDeficits.begin(); j != Scheduler::allQueueDeficits.end(); j++) {
+        VoName voName = j->first;
+        std::map<ActivityName, int> activityDeficits = j->second;
+        for (auto k = activityDeficits.begin(); k != activityDeficits.end(); k++) {
+            ActivityName activityName = k->first;
+            int deficit = k->second;
+
+            // Only include a queue in priority queue if the queue has pending transfers.
+            if (queueSubmittedCounts[voName][activityName] > 0) {
+                deficitPq.push(std::make_tuple(deficit, voName, activityName));
+            }
+        }
+    }
+
+    // (2) Compute how many slots are actually available to this link after excluding active transfers.
     long long totalActiveCount = 0;
     for (auto i = queueActiveCounts.begin(); i != queueActiveCounts.end(); i++) {
         std::map<ActivityName, long long> activityActiveCounts = i->second;
@@ -227,7 +230,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         return assignedSlotCounts;
     }
 
-    // (2) Assign each of the available slot using priority queue.
+    // (3) Assign each of the available slot using priority queue.
     for (int i = 0; i < availableSlots; i++) {
         if (deficitPq.empty()) {
             // No more queues with pending transfers
@@ -416,9 +419,12 @@ std::map<std::string, int> Scheduler::assignShouldBeSlotsUsingHuntingtonHill(
             allocation[queueName] = 1;
             maxSlots -= 1;
 
-            // Compute priority
-            double priority = pow(weight, 2) / 2.0;
-            pq.push(std::make_tuple(priority, queueName));
+            activeAndPendingCounts[queueName] -= 1;
+            if (activeAndPendingCounts[queueName] > 0) {
+                // Compute priority and push to priority queue
+                double priority = pow(weight, 2) / 2.0;
+                pq.push(std::make_tuple(priority, queueName));
+            }
         }
     }
 

@@ -94,24 +94,22 @@ BOOST_AUTO_TEST_CASE(TestNShapedMaximumFlow)
 }
 
 
-/* Network Graph Representation:
-Note we cannot represent edge crossing, treat the dest1 nodes as the same node
-   [Virtual Source]
-       |     |
-      10    20
-       |     |
-   [source1] [source2]
-    /  \      /  \
-   10   5    20  10
-  /      \  /      \
-[dest1]  [dest2]  [dest1] 
-   |       |       /
-   15      25     /
-   |       |     /
-   [Virtual Sink]
-*/ 
-
-
+// /* Network Graph Representation:
+// Note we cannot represent edge crossing, treat the dest1 nodes as the same node
+//    [Virtual Source]
+//        |     |
+//       10    20
+//        |     |
+//    [source1] [source2]
+//     /  \      /  \
+//    10   5    20  10
+//   /      \  /      \
+// [dest1]  [dest2]  [dest1] 
+//    |       |       /
+//    15      25     /
+//    |       |     /
+//    [Virtual Sink]
+// */ 
 BOOST_AUTO_TEST_CASE (TestMultiWeightMaximumFlow)
 {
     // Setup the network environment

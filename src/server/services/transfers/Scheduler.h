@@ -174,15 +174,13 @@ public:
     );
 
     /**
-     * Assign slots to each queue using the priority queue of deficits.
+     * Assign slots to each queue using a priority queue of deficits.
      * @param maxSlots Max number of slots available to this link.
-     * @param deficitPq A priority queue of deficits of all queues in this link.
      * @param queueActiveCounts Number of active slots for each activity in each VO.
      * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
     */
-    static std::map<VoName, std::map<ActivityName, int>> assignSlotsUsingDeficit(
+    static std::map<VoName, std::map<ActivityName, int>> assignSlotsUsingDeficitPriorityQueue(
         int maxSlots,
-        std::priority_queue<std::tuple<int, VoName, ActivityName>>& deficitPq,
         std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
         std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
     );
