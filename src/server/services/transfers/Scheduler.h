@@ -28,12 +28,36 @@
 namespace fts3 {
 namespace server {
 
+/*
+ * The Scheduler class implements the scheduling process of TransfersService. It takes as input
+ * a mapping from each pair to the maximum number of slots allocated to that pair, as computed
+ * by the Allocator component, and produces an output that maps each vo to a list of TransferFiles
+ * that will be scheduled.
+ *
+ * Currently, this class provides two scheduling algorithms: randomized algorithm, and deficit-based
+ * priority-queueing algorithm. The randomized algorithm is implemented in doRandomizedSchedule, and
+ * the deficit-based algorithm is implemented in doDeficitScheduleUsingSlot. The suffix  "UsingSlot"
+ * is used to indicate that this algorithm uses slots as resource constraints, and future development
+ * may introduce a deficit-based algorithm using bandwidth as constraints.
+ *
+ * This class interfaces with TransfersService by providing a function pointer to either doRandomizedSchedule
+ * or doDeficitScheduleUsingSlot, depending on the configuration specification for TransfersServiceSchedulingAlgorithm,
+ * which can be set to either RANDOMIZED or DEFICIT.
+ *
+ * For future development, if a new scheduling algorithm is introduced, the operator should introduce
+ * a new function doNewSchedule that implements the logic of the algorithm. The operator should also
+ * modify the getSchedulerAlgorithm and getSchedulerFunction functions to include the new algorithm.
+ * Additionally, the operator needs to modify serverconfigreader.cpp to include the new scheduler
+ * algorithm as options for the configuration file.
+ */
+
 class Scheduler
 {
 public:
+    // Define the included scheduling algorithms
     enum SchedulerAlgorithm {
         RANDOMIZED,
-        DEFICIT
+        DEFICIT_SLOT
     };
 
     // Define VoName type, which is std::string, for the sake of clarity
@@ -46,7 +70,7 @@ public:
     using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&);
 
     // Stores deficits of queues
-    static std::map<VoName, std::map<ActivityName, int>> allQueueDeficits;
+    static std::map<VoName, std::map<ActivityName, int>> allQueueDeficitSlots;
 
     // Returns the scheduling algorithm based on the config
     static SchedulerAlgorithm getSchedulerAlgorithm();
@@ -67,12 +91,12 @@ public:
     static std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
 
     /**
-     * Run deficit-based priority queueing scheduling.
+     * Run deficit-based priority queueing scheduling, using slots as resource constraint.
      * @param slotsPerLink number of slots assigned to each link, as determined by allocator
      * @param queues All current pending transfers
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    static std::map<VoName, std::list<TransferFile>> doDeficitSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
+    static std::map<VoName, std::list<TransferFile>> doDeficitScheduleUsingSlot(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
 
     /* Helper functions */
 
@@ -158,12 +182,12 @@ public:
     );
 
     /**
-     * Compute the deficit for each queue in a pair. This will update Scheduler::allQueueDeficits.
+     * Compute the deficit for each queue in a pair. This will update Scheduler::allQueueDeficitSlots.
      * @param queueShouldBeAllocated Number of should-be-allocated slots for each activity in each VO.
      * @param queueActiveCounts Number of active slots for each activity in each VO.
      * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
     */
-    static void computeDeficits(
+    static void computeDeficitSlots(
         std::map<VoName, std::map<ActivityName, int>> &queueShouldBeAllocated,
         std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
         std::map<VoName, std::map<ActivityName, long long>>& queueSubmittedCounts

@@ -518,7 +518,7 @@ po::options_description ServerConfigReader::_defineConfigOptions()
     (
         "TransfersServiceSchedulingAlgorithm",
         po::value<std::string>( &(_vars["TransfersServiceSchedulingAlgorithm"]) )->default_value(FTS3_CONFIG_SERVERCONFIG_TRANSFER_SERVICE_SCHEDULING_ALGORITHM),
-        "Specify transfer service's task scheduling algorithm as DEFICIT or RANDOMIZED (default)"
+        "Specify transfer service's task scheduling algorithm as DEFICIT_SLOT or RANDOMIZED (default)"
     )
     ;
 

@@ -30,20 +30,25 @@ using namespace db;
 namespace fts3 {
 namespace server {
 
-std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::allQueueDeficits = std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>>();
+std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::allQueueDeficitSlots = std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>>();
 
 Scheduler::SchedulerAlgorithm Scheduler::getSchedulerAlgorithm() {
     std::string schedulerConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceSchedulingAlgorithm");
     FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: TransfersServiceSchedulingAlgorithm is " << schedulerConfig << "(lzhou)" << commit;
 
     if (schedulerConfig == "RANDOMIZED") {
-        return Scheduler::SchedulerAlgorithm::RANDOMIZED;
+        allQueueDeficitSlots.clear(); // Reset allQueueDeficitSlots
+        return SchedulerAlgorithm::RANDOMIZED;
     }
-    else if(schedulerConfig == "DEFICIT") {
-        return Scheduler::SchedulerAlgorithm::DEFICIT;
+    else if(schedulerConfig == "DEFICIT_SLOT") {
+        return SchedulerAlgorithm::DEFICIT_SLOT;
     }
     else {
-        return Scheduler::SchedulerAlgorithm::RANDOMIZED;
+        FTS3_COMMON_LOGGER_NEWLOG(WARNING) << "Scheduler: invalid config value for TransfersServiceSchedulingAlgorithm found: " 
+                                            << schedulerConfig << ". "
+                                            << "Defaulting to Randomized algorithm. "
+                                            << "(lzhou)" << commit;
+        return SchedulerAlgorithm::RANDOMIZED;
     }
 }
 
@@ -53,8 +58,8 @@ Scheduler::SchedulerFunction Scheduler::getSchedulerFunction() {
         case Scheduler::RANDOMIZED:
             function = &Scheduler::doRandomizedSchedule;
             break;
-        case Scheduler::DEFICIT:
-            function = &Scheduler::doDeficitSchedule;
+        case Scheduler::DEFICIT_SLOT:
+            function = &Scheduler::doDeficitScheduleUsingSlot;
             break;
         default:
             // Use randomized algorithm as default
@@ -96,11 +101,11 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doRandomizedSche
     return scheduledFiles;
 }
 
-std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedule(
+std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitScheduleUsingSlot(
     std::map<Pair, int> &slotsPerLink, 
     std::vector<QueueId> &queues
 ){
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in doDeficitSchedule (lzhou)" << commit;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in doDeficitScheduleUsingSlot (lzhou)" << commit;
 
     auto db = DBSingleton::instance().getDBObjectInstance();
     std::map<VoName, std::list<TransferFile>> scheduledFiles;
@@ -159,8 +164,8 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
             queueActiveCounts,
             queueSubmittedCounts);
 
-        // (5) Compute deficit; this will update allQueueDeficits.
-        computeDeficits(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
+        // (5) Compute deficit; this will update allQueueDeficitSlots.
+        computeDeficitSlots(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
         // (6) Assign available slots to queues using a priority queue of deficits.
         std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts = assignSlotsUsingDeficitPriorityQueue(
@@ -247,7 +252,7 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
     // (1) Store deficit into priority queue.
     std::priority_queue<std::tuple<int, VoName, ActivityName>> deficitPq;
 
-    for (auto j = Scheduler::allQueueDeficits.begin(); j != Scheduler::allQueueDeficits.end(); j++) {
+    for (auto j = Scheduler::allQueueDeficitSlots.begin(); j != Scheduler::allQueueDeficitSlots.end(); j++) {
         VoName voName = j->first;
         std::map<ActivityName, int> activityDeficits = j->second;
         for (auto k = activityDeficits.begin(); k != activityDeficits.end(); k++) {
@@ -527,14 +532,14 @@ std::map<std::string, int> Scheduler::assignShouldBeSlotsUsingHuntingtonHill(
     return allocation;
 }
 
-void Scheduler::computeDeficits(
+void Scheduler::computeDeficitSlots(
     std::map<VoName, std::map<ActivityName, int>> &queueShouldBeAllocated,
     std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
     std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
 ){
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeDeficits (lzhou)" << commit;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeDeficitSlots (lzhou)" << commit;
 
-    std::map<VoName, std::map<ActivityName, int>> &deficits = Scheduler::allQueueDeficits;
+    std::map<VoName, std::map<ActivityName, int>> &deficits = Scheduler::allQueueDeficitSlots;
 
     for (auto i = queueActiveCounts.begin(); i != queueActiveCounts.end(); i++) {
         VoName voName = i->first;
@@ -553,12 +558,12 @@ void Scheduler::computeDeficits(
                     deficits[voName][activityName] = 0;
                 }
                 deficits[voName][activityName] += shouldBeAllocatedCount - activeCount;
-            }
 
-            FTS3_COMMON_LOGGER_NEWLOG(INFO) << "deficit[vo=" << voName << "]"
-                                            << "[activity=" << activityName << "]"
-                                            << " = " << deficits[voName][activityName] << " "
-                                            << "(lzhou)" << commit;
+                FTS3_COMMON_LOGGER_NEWLOG(INFO) << "deficit[vo=" << voName << "]"
+                                                << "[activity=" << activityName << "]"
+                                                << " = " << deficits[voName][activityName] << " "
+                                                << "(lzhou)" << commit;
+            }
         }
     }
 }

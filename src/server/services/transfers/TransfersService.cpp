@@ -104,9 +104,29 @@ void TransfersService::runService()
 
 void TransfersService::executeFileTransfers(
     std::map<std::string, std::list<TransferFile>> scheduledFiles, 
-    int availableUrlCopySlots
+    int availableUrlCopySlots,
+    std::vector<QueueId> queues
 ){
+    auto db = DBSingleton::instance().getDBObjectInstance();
+
     ThreadPool<FileTransferExecutor> execPool(execPoolSize);
+    std::map<std::string, int> slotsLeftForSource, slotsLeftForDestination;
+    for (auto i = queues.begin(); i != queues.end(); ++i) {
+        // To reduce queries, fill in one go limits as source and as destination
+        if (slotsLeftForDestination.count(i->destSe) == 0) {
+            StorageConfig seConfig = db->getStorageConfig(i->destSe);
+            slotsLeftForDestination[i->destSe] = seConfig.inboundMaxActive>0?seConfig.inboundMaxActive:60;
+            slotsLeftForSource[i->destSe] = seConfig.outboundMaxActive>0?seConfig.outboundMaxActive:60;
+        }
+        if (slotsLeftForSource.count(i->sourceSe) == 0) {
+            StorageConfig seConfig = db->getStorageConfig(i->sourceSe);
+            slotsLeftForDestination[i->sourceSe] = seConfig.inboundMaxActive>0?seConfig.inboundMaxActive:60;
+            slotsLeftForSource[i->sourceSe] = seConfig.outboundMaxActive>0?seConfig.outboundMaxActive:60;
+        }
+        // Once it is filled, decrement
+        slotsLeftForDestination[i->destSe] -= i->activeCount;
+        slotsLeftForSource[i->sourceSe] -= i->activeCount;
+    }
 
     try 
     {
@@ -158,15 +178,34 @@ void TransfersService::executeFileTransfers(
                     proxies[proxy_key] = DelegCred::getProxyFile(tf.userDn, tf.credId);
                 }
 
-                // Increment scheduled transfers by activity
-                scheduledByActivity[tf.activity]++;
+                if (slotsLeftForDestination[tf.destSe] <= 0) {
+                    if (warningPrintedDst.count(tf.destSe) == 0) {
+                        FTS3_COMMON_LOGGER_NEWLOG(WARNING)
+                            << "Reached limitation for destination " << tf.destSe
+                            << commit;
+                        warningPrintedDst.insert(tf.destSe);
+                    }
+                }
+                else if (slotsLeftForSource[tf.sourceSe] <= 0) {
+                    if (warningPrintedSrc.count(tf.sourceSe) == 0) {
+                        FTS3_COMMON_LOGGER_NEWLOG(WARNING)
+                            << "Reached limitation for source " << tf.sourceSe
+                            << commit;
+                        warningPrintedSrc.insert(tf.sourceSe);
+                    }
+                } else {
+                    // Increment scheduled transfers by activity
+                    scheduledByActivity[tf.activity]++;
 
-                FileTransferExecutor *exec = new FileTransferExecutor(tf,
-                    monitoringMessages, infosys, ftsHostName,
-                    proxies[proxy_key], logDir, msgDir);
+                    FileTransferExecutor *exec = new FileTransferExecutor(tf,
+                        monitoringMessages, infosys, ftsHostName,
+                        proxies[proxy_key], logDir, msgDir);
 
-                execPool.start(exec);
-                --availableUrlCopySlots;
+                    execPool.start(exec);
+                    --availableUrlCopySlots;
+                    --slotsLeftForDestination[tf.destSe];
+                    --slotsLeftForSource[tf.sourceSe];
+                }
             }
         }
 
@@ -245,11 +284,16 @@ void TransfersService::executeUrlcopy()
             return;
         }
 
-        std::map<Pair, int> slotsPerLink = allocatorFunction(queues); 
+        std::map<Pair, int> slotsPerLink = allocatorFunction(queues);
+
+        time_t start = time(0);
         std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
+        time_t end = time(0);
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << end - start << " " 
+                                        << "(lzhou)" << commit;
 
         // Execute file transfers
-        executeFileTransfers(scheduledFiles, availableUrlCopySlots);
+        executeFileTransfers(scheduledFiles, availableUrlCopySlots, queues);
         
         time_t end = time(0); //std::chrono::system_clock::now();
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "DBtime=\"TransfersService\" "

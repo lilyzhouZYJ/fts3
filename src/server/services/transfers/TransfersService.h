@@ -62,8 +62,9 @@ protected:
      * Execute the file transfers.
      * @param scheduledFiles A map from each VO to the scheduled TransferFiles, as determined by the Scheduler
      * @param availableUrlCopySlots Total number of available transfer slots
+     * @param queues All current pending transfers
     */
-    void executeFileTransfers(std::map<Scheduler::VoName, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots);
+    void executeFileTransfers(std::map<std::string, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots, std::vector<QueueId> queues);
 
     void executeUrlcopy();
 };
