@@ -286,6 +286,12 @@ std::map<std::string, long long> MySqlAPI::getActiveCountForEachActivity(std::st
     return getJobsOfStatusInQueue(sql, src, dst, vo, "ACTIVE");
 }
 
+std::map<std::string, long long> MySqlAPI::getActivitiesInQueue(std::string src, std::string dst, std::string vo)
+{
+    soci::session sql(*connectionPool);
+    return getActivitiesInQueue(sql, src, dst, vo);
+}
+
 std::map<std::string, long long> MySqlAPI::getActivitiesInQueue(soci::session& sql, std::string src, std::string dst, std::string vo)
 {
     return getJobsOfStatusInQueue(sql, src, dst, vo, "SUBMITTED");

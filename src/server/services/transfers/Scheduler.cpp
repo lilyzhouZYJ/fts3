@@ -107,7 +107,6 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
 ){
     FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in doDeficitScheduleUsingSlot (lzhou)" << commit;
 
-    auto db = DBSingleton::instance().getDBObjectInstance();
     std::map<VoName, std::list<TransferFile>> scheduledFiles;
 
     if (queues.empty())
@@ -118,23 +117,22 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     //     which we need for later steps. Hence this reduces redundant queries into the database.
     //     The activity weight of each VO also does not depend on the pair, hence does not need to go into the loop below.
     std::map<VoName, std::map<ActivityName, double>> voActivityWeights = getActivityWeights(queues);
+
+    // (2) For each pair, fetch VO weights.
+    //     We also need to process the "public" weights and unschedulable weights (i.e. VO weight <= 0).
+    std::vector<QueueId> unschedulable;
+    std::map<Pair, std::map<VoName, double>> voWeightsPerPair = getVoWeightsInEachPair(slotsPerLink, queues, unschedulable);
+    failUnschedulable(unschedulable, slotsPerLink);
     
     // For each link, compute deficit of its queues and perform scheduling
     for (auto i = slotsPerLink.begin(); i != slotsPerLink.end(); i++) {
         const Pair p = i->first;
         const int maxSlots = i->second;
+        std::map<VoName, double> voWeights = voWeightsPerPair[p];
 
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduling for (src=" << p.source << ", dst=" << p.destination << "), "
                                         << "maxSlots for the pair is " << maxSlots << " "
                                         << "(lzhou)" << commit;
-
-        // (2) Fetch weights of all vo's in this pair.
-        //     This is needed to compute should-be-allocated slots.
-        std::map<VoName, double> voWeights;
-        std::vector<ShareConfig> shares = db->getShareConfig(p.source, p.destination);
-        for (auto j = shares.begin(); j != shares.end(); j++) {
-            voWeights[j->vo] = j->weight;
-        }
 
         // (3) Compute the number of active / submitted transfers for each activity in each vo,
         //     as well as the number of pending (submitted) transfers for each activity in each vo.
@@ -178,6 +176,82 @@ std::map<Scheduler::VoName, std::list<TransferFile>> Scheduler::doDeficitSchedul
     return scheduledFiles;
 }
 
+std::map<Pair, std::map<Scheduler::VoName, double>> Scheduler::getVoWeightsInEachPair(
+    std::map<Pair, int> &slotsPerLink, 
+    std::vector<QueueId> &queues,
+    std::vector<QueueId> &unschedulable
+) {
+    std::map<Pair, std::map<VoName, double>> voWeightsPerPair;
+    auto db = DBSingleton::instance().getDBObjectInstance();
+
+    // Map each pair to a list of all (VO, VO active count) in the pair
+    std::map<Pair, std::vector<std::pair<VoName, unsigned>>> vosInPair;
+    for (auto i = queues.begin(); i != queues.end(); ++i) {
+        vosInPair[Pair(i->sourceSe, i->destSe)].push_back(std::make_pair(i->voName, i->activeCount));
+    }
+
+    for (auto i = slotsPerLink.begin(); i != slotsPerLink.end(); i++) {
+        const Pair pair = i->first;
+        std::map<VoName, double> finalVoWeights;  // post-processed VO weights
+
+        // Fetch weights of all VO's in this pair
+        std::map<VoName, double> voWeights;
+        std::vector<ShareConfig> shares = db->getShareConfig(pair.source, pair.destination);
+        for (auto j = shares.begin(); j != shares.end(); j++) {
+            voWeights[j->vo] = j->weight;
+        }
+
+        // Fetch list of (VO, VO active count) in the pair
+        std::vector<std::pair<VoName, unsigned>> vos = vosInPair[pair];
+
+        // Get the public (catch-all) weight;
+        // If there is no config, this is the only weight
+        double publicWeight = 0;
+        if (voWeights.empty()) {
+            publicWeight = 1;
+        }
+        else {
+            auto publicIter = voWeights.find("public");
+            if (publicIter != voWeights.end()) {
+                publicWeight = publicIter->second;
+            }
+        }
+
+        // Need to calculate how many "public" there are, so we can split
+        int publicCount = 0;
+        for (auto i = vos.begin(); i != vos.end(); ++i) {
+            if (voWeights.find(i->first) == voWeights.end()) {
+                publicCount++;
+            }
+        }
+        if (publicCount > 0) {
+            publicWeight /= static_cast<double>(publicCount);
+        }
+
+        // Fill up the actual weights after processing public weights
+        for (auto i = vos.begin(); i != vos.end(); i++) {
+            VoName voName = i->first;
+            unsigned activeCount = i->second;
+
+            auto wIter = voWeights.find(voName);
+            if (wIter == voWeights.end()) {
+                finalVoWeights[voName] = publicWeight;
+            } else {
+                finalVoWeights[voName] = wIter->second;
+            }
+
+            if (finalVoWeights[voName] <= 0) {
+                // This VO is unschedulable
+                unschedulable.emplace_back(pair.source, pair.destination, voName, activeCount);
+            }
+        }
+
+        voWeightsPerPair[pair] = finalVoWeights;
+    }
+
+    return voWeightsPerPair;
+}
+
 std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, double>> Scheduler::getActivityWeights(std::vector<QueueId> &queues)
 {
     FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in getActivityWeights (lzhou)" << commit;
@@ -190,8 +264,22 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, double>> Scheduler
             // VO already exists in voActivityWeights; don't need to fetch again
             continue;
         }
+
         // Fetch activity weights for that VO
         std::map<ActivityName, double> activityWeights = db->getActivityShareForVo(i->voName);
+        double defaultWeight = activityWeights["default"];
+
+        // Fetch all activities for this VO, and determine if there are any without
+        // activity weights in activityWeights. These activities will be given the 
+        // default weight.
+        std::map<ActivityName, long long> activitiesInVo = db->getActivitiesInQueue(i->sourceSe, i->destSe, i-> voName);
+        for (auto j = activitiesInVo.begin(); j != activitiesInVo.end(); j++) {
+            ActivityName activityName = j->first;
+            if (j->second > 0 && activityWeights.find(activityName) == activityWeights.end()) {
+                activityWeights[activityName] = defaultWeight;
+            }
+        }
+
         voActivityWeights[i->voName] = activityWeights;
 
         for (auto j = activityWeights.begin(); j != activityWeights.end(); j++) {
@@ -476,11 +564,13 @@ std::map<std::string, int> Scheduler::assignShouldBeSlotsUsingHuntingtonHill(
 
     // Compute qualification threshold;
     // this step only includes non-empty queues (with either active or pending transfers).
+    // This step also includes queues with negative weights, which make them unschedulable.
+    // The unschedulable queues should have been processed before.
     double weightSum = 0;
     for (auto i = activeAndPendingCounts.begin(); i != activeAndPendingCounts.end(); i++) {
         std::string queueName = i->first;
-        double count = i->second;
-        if (count > 0) {
+        int count = i->second;
+        if (count > 0 && weights[queueName] > 0) {
             weightSum += weights[queueName];
         }
     }

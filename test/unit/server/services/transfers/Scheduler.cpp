@@ -69,7 +69,6 @@ BOOST_AUTO_TEST_CASE(TestComputeDeficitsWithEmptyQueue)
     std::string act12 = "act12";
 
     Pair pair("srcSe", "dstSe");
-    int maxSlots = 100;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> queueActiveCounts;
     queueActiveCounts[vo1][act11] = 10;

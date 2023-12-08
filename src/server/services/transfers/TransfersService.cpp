@@ -286,10 +286,10 @@ void TransfersService::executeUrlcopy()
 
         std::map<Pair, int> slotsPerLink = allocatorFunction(queues);
 
-        time_t start = time(0);
+        time_t schedulerStartTime = time(0);
         std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
-        time_t end = time(0);
-        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << end - start << " " 
+        time_t schedulerEndTime = time(0);
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << schedulerEndTime - schedulerStartTime << " " 
                                         << "(lzhou)" << commit;
 
         // Execute file transfers

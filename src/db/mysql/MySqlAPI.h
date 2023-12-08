@@ -369,6 +369,12 @@ public:
     /// @param vo   vo
     virtual std::map<std::string, double> getActivityShareForVo(std::string vo);
 
+    /// Get list of activities in a given (src, dst, vo)
+    /// @param src  source of link
+    /// @param dest destination of link
+    /// @param vo   vo
+    virtual std::map<std::string, long long> getActivitiesInQueue(std::string src, std::string dst, std::string vo);
+
 private:
     size_t                poolSize;
     soci::connection_pool* connectionPool;

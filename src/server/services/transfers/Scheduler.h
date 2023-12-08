@@ -84,7 +84,7 @@ public:
 
     /**
      * Run scheduling using weighted randomization.
-     * @param slotsPerLink number of slots assigned to each link, as determined by allocator
+     * @param slotsPerLink Number of slots assigned to each link, as determined by allocator
      * @param queues All current pending transfers
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
@@ -224,6 +224,20 @@ private:
      * @param queues All current pending transfers
     */
     static std::map<VoName, std::map<ActivityName, double>> getActivityWeights(std::vector<QueueId> &queues);
+
+    /**
+     * Fetch from the database the VO weights. Then process "public" weights and populate
+     * the vector of "unschedulabe" transfers (i.e. VO weight <= 0).
+     * @param slotsPerLink Number of slots assigned to each link, as determined by allocator
+     * @param queues All current pending transfers
+     * @param[out] unschedulable [Output] Unschedulable transfers
+     * @return A map from each pair to a map from each of the pair's VOs and the VO weights
+    */
+    static std::map<Pair, std::map<VoName, double>> getVoWeightsInEachPair(
+        std::map<Pair, int> &slotsPerLink, 
+        std::vector<QueueId> &queues,
+        std::vector<QueueId> &unschedulable
+    );
 
     /**
      * Transfers in unschedulable queues must be set to fail.

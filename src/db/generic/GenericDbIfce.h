@@ -409,6 +409,9 @@ public:
 
     /// Get the number of submitted files in each activity within a (src, dst, vo)
     virtual std::map<std::string, long long> getSubmittedCountInActivity(std::string src, std::string dst, std::string vo);
+
+    /// Get list of activities in a given (src, dst, vo)
+    virtual std::map<std::string, long long> getActivitiesInQueue(std::string src, std::string dst, std::string vo);
 };
 
 #endif // GENERICDBIFCE_H_
