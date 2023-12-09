@@ -453,10 +453,18 @@ std::map<std::string, int> MySqlAPI::getFilesNumPerActivity(soci::session& sql,
 
         // Debug output
         std::map<std::string, int>::const_iterator j;
+        int total_slots_assigned = 0;
         for (j = activityFilesNum.begin(); j != activityFilesNum.end(); ++j)
         {
             FTS3_COMMON_LOGGER_NEWLOG(DEBUG) << __func__ << ": " << j->first << " assigned " << j->second << commit;
+            total_slots_assigned += j->second;
         }
+        // log the total number of shares assigned to this src/dest link 
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                        << "Number of slots assigned (by scheduler) for link "
+                                        << "source=" << src << " dest=" << dst << ": "
+                                        << total_slots_assigned
+                                        << commit; 
     }
     catch (std::exception& e)
     {
@@ -959,7 +967,6 @@ void MySqlAPI::getReadyTransfers(const std::vector<QueueId>& queues,
         throw UserError(std::string(__func__) + ": Caught exception ");
     }
 }
-
 
 /// Return how many free slots there are for the given pair
 /// @param visited Transfers not yet updated on the DB, but scheduled by the caller

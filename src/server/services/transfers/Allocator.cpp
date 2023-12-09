@@ -22,6 +22,7 @@
 #include "MaximumFlow.h"
 #include "config/ServerConfig.h"
 #include "db/generic/SingleDbInstance.h"
+#include "common/Logger.h"
 
 using namespace fts3::common;
 using namespace db;
@@ -32,18 +33,29 @@ namespace server {
     
 // Tracks deficit on each link; incremented as links become starved of transfers
 static std::map<Pair, int> linkDeficits = std::map<Pair, int>();
-static int dummyLambda = 0;
+static int lambda = config::ServerConfig::instance().get<int>("TransfersServiceAllocatorLambda");
 
 Allocator::AllocatorAlgorithm getAllocatorAlgorithm() {
     std::string allocatorConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceAllocatorAlgorithm");
     if (allocatorConfig == "MAXIMUM_FLOW") {
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                        << "Allocator algorithm: MAXIMUM_FLOW"
+                                        << commit;
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                        << "Value of lambda (max flow algorithm): "
+                                        << lambda
+                                        << commit; 
         return Allocator::AllocatorAlgorithm::MAXIMUM_FLOW;
     }
     else if(allocatorConfig == "GREEDY") {
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                        << "Allocator algorithm: GREEDY"
+                                        << commit;
         return Allocator::AllocatorAlgorithm::GREEDY;
     }
     else {
-        return Allocator::AllocatorAlgorithm::GREEDY;
+        // WARNING log? 
+        return Allocator::AllocatorAlgorithm::MAXIMUM_FLOW;
     }
 }
 
@@ -54,9 +66,6 @@ Allocator::AllocatorFunction Allocator::getAllocatorFunction() {
             function = &Allocator::GreedyAllocator;
             break;
         case Allocator::MAXIMUM_FLOW:
-            // initializing lambda here for now
-            // TODO: allow lambda to be configured 
-            // dummyLambda = 0; 
             function = &Allocator::MaximumFlowAllocator;
             break;
         default:
@@ -132,7 +141,7 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
     for (const auto& i : queues) {
         // determine if link is starved 
         Pair currLink = Pair(i.sourceSe, i.destSe);
-        if (linkDeficits.find(currLink) != linkDeficits.end() && linkDeficits[currLink] >= dummyLambda) {
+        if (linkDeficits.find(currLink) != linkDeficits.end() && linkDeficits[currLink] >= lambda) {
             // keep track of which links are starved, and allocate maximum capacity (at first, to be updated below)
             starvedLinkCapacities[currLink] = linkCapacities[currLink]; 
         }
@@ -163,7 +172,19 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
         // reset this link's deficit to 0
         // note that deficit will later be incremented if link was not fully allocated (linkCapacities[link] < numSlotsToAllocate)
         linkDeficits[link] = linkCapacities[link] - numSlotsToAllocate;
+
+        // log the starved link
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                        << "Starved link: "
+                                        << "source=" << link.source << " dest=" << link.destination
+                                        << commit; 
     }
+
+    // log the total number of starved links 
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                    << "Total number of starved links="
+                                    << sortedStarvedLinks.size()
+                                    << commit; 
 
     /*
     *   Max flow: run maximum flow algorithm on non-starved links to maximize throughput of allocation
@@ -224,6 +245,12 @@ std::map<Pair, int> Allocator::MaximumFlowAllocator(
         Pair link = entry.first;
         int numSlotsToAllocate = entry.second;
         linkDeficits[link] += (linkCapacities[link] - numSlotsToAllocate);
+        // log the total number of slots allocated to this activity by max flow
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: "
+                                << "Number of slots allocated (by max flow) for link "
+                                << "source=" << link.source << " dest=" << link.destination << ": "
+                                << numSlotsToAllocate
+                                << commit;
     }
 
     return allocatorMap;

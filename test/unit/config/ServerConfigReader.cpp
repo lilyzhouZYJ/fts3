@@ -113,6 +113,7 @@ BOOST_FIXTURE_TEST_CASE (functionOperatorFromFile, fts3::config::ServerConfigRea
     file << "ThreadNum=" << f_intval << std::endl;
     file << "TransfersServiceSchedulingAlgorithm=" << f_str << std::endl;
     file << "TransfersServiceAllocatorAlgorithm=" << f_str << std::endl;
+    file << "TransfersServiceAllocatorLambda=" << f_intval << std::endl;
     file.close();
 
     // Read from the file
@@ -133,6 +134,7 @@ BOOST_FIXTURE_TEST_CASE (functionOperatorFromFile, fts3::config::ServerConfigRea
     BOOST_CHECK_EQUAL (_vars["TransferLogDirectory"], f_str);
     BOOST_CHECK_EQUAL (_vars["TransfersServiceSchedulingAlgorithm"], f_str);
     BOOST_CHECK_EQUAL (_vars["TransfersServiceAllocatorAlgorithm"], f_str);
+    BOOST_CHECK_EQUAL (_vars["TransfersServiceAllocatorLambda"], f_intval);
 
     BOOST_CHECK_NO_THROW(boost::filesystem::remove(filename));
 }

@@ -65,7 +65,6 @@ protected:
      * @param queues All current pending transfers
     */
     void executeFileTransfers(std::map<std::string, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots, std::vector<QueueId> queues);
-
     void executeUrlcopy();
 };
 
