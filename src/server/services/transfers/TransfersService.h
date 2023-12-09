@@ -27,11 +27,11 @@
 
 #include "db/generic/QueueId.h"
 #include "../BaseService.h"
-
+#include "Allocator.h"
+#include "Scheduler.h"
 
 namespace fts3 {
 namespace server {
-
 
 class TransfersService: public BaseService
 {
@@ -53,8 +53,18 @@ protected:
     std::string logDir;
     std::string msgDir;
     boost::posix_time::time_duration schedulingInterval;
+    Allocator::AllocatorFunction allocatorFunction;
 
-    void getFiles(const std::vector<QueueId>& queues, int availableUrlCopySlots);
+    // Function pointer for the scheduler function, depending on config
+    Scheduler::SchedulerFunction schedulerFunction;
+
+    /**
+     * Execute the file transfers.
+     * @param scheduledFiles A map from each VO to the scheduled TransferFiles, as determined by the Scheduler
+     * @param availableUrlCopySlots Total number of available transfer slots
+     * @param queues All current pending transfers
+    */
+    void executeFileTransfers(std::map<std::string, std::list<TransferFile>> scheduledFiles, int availableUrlCopySlots, std::vector<QueueId> queues);
     void executeUrlcopy();
 };
 

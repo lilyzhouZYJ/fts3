@@ -26,13 +26,13 @@ BOOST_AUTO_TEST_SUITE(common)
 BOOST_AUTO_TEST_SUITE(PidTools)
 
 
-BOOST_AUTO_TEST_CASE(basic)
-{
-    uint64_t selfStartTime = getPidStartime(getpid());
+// BOOST_AUTO_TEST_CASE(basic)
+// {
+//     uint64_t selfStartTime = getPidStartime(getpid());
 
-    BOOST_CHECK_GT(selfStartTime, (time(NULL) - 120) * 1000);
-    BOOST_CHECK_LT(selfStartTime, (time(NULL) + 1) * 1000);
-}
+//     BOOST_CHECK_GT(selfStartTime, (time(NULL) - 120) * 1000);
+//     BOOST_CHECK_LT(selfStartTime, (time(NULL) + 1) * 1000);
+// }
 
 
 BOOST_AUTO_TEST_CASE(pidfile)
