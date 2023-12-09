@@ -388,19 +388,24 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Assign a slot to next queue: "
                                         << "vo=" << voName << " "
                                         << "activity=" << activityName << " "
-                                        << "deficit=" << deficit << " "
+                                        << "deficit(pre-assignment)=" << deficit << " "
                                         << "(lzhou)" << commit;
 
-        // (ii) Assign a slot to this queue.
+        // (ii) Assign a slot to this queue, update deficit.
         if (assignedSlotCounts.find(voName) == assignedSlotCounts.end() || assignedSlotCounts[voName].find(activityName) == assignedSlotCounts[voName].end()) {
+            // Initialize
             assignedSlotCounts[voName][activityName] = 0;
         }
         assignedSlotCounts[voName][activityName] += 1;
+        deficit -= 1;
+        allQueueDeficitSlots[voName][activityName] = deficit;
 
         // (iii) Only push the updated deficit back into the priority queue if there are more pending transfers.
+        //       Otherwise, reset deficit to 0.
         if (assignedSlotCounts[voName][activityName] < queueSubmittedCounts[voName][activityName]) {
-            deficit -= 1;
             deficitPq.push(std::make_tuple(deficit, voName, activityName));
+        } else {
+            allQueueDeficitSlots[voName][activityName] = 0;
         }
     }
 
@@ -640,11 +645,12 @@ void Scheduler::computeDeficitSlots(
             long long activeCount = j->second;
 
             if (activeCount + queueSubmittedCounts[voName][activityName] == 0) {
-                // Queue is empty; reset deficit to 0
+                // Queue is empty; reset deficit to 0.
                 deficits[voName][activityName] = 0;
             } else {
                 int shouldBeAllocatedCount = queueShouldBeAllocated[voName][activityName];
                 if (deficits.find(voName) == deficits.end() || deficits[voName].find(activityName) == deficits[voName].end()) {
+                    // Initialize
                     deficits[voName][activityName] = 0;
                 }
                 deficits[voName][activityName] += shouldBeAllocatedCount - activeCount;

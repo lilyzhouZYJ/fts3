@@ -57,9 +57,6 @@ TransfersService::TransfersService(): BaseService("TransfersService")
 
     monitoringMessages = config::ServerConfig::instance().get<bool>("MonitoringMessaging");
     schedulingInterval = config::ServerConfig::instance().get<boost::posix_time::time_duration>("SchedulingInterval"); 
-
-    allocatorFunction = Allocator::getAllocatorFunction();
-    schedulerFunction = Scheduler::getSchedulerFunction();
 }
 
 TransfersService::~TransfersService()
@@ -284,9 +281,15 @@ void TransfersService::executeUrlcopy()
             return;
         }
 
+        time_t allocatorStartTime = time(0);
+        Allocator::AllocatorFunction allocatorFunction = Allocator::getAllocatorFunction();
         std::map<Pair, int> slotsPerLink = allocatorFunction(queues);
+        time_t allocatorEndTime = time(0);
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: Time to execute allocator: " << allocatorStartTime - allocatorEndTime
+                                        << commit;
 
         time_t schedulerStartTime = time(0);
+        Scheduler::SchedulerFunction schedulerFunction = Scheduler::getSchedulerFunction();
         std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
         time_t schedulerEndTime = time(0);
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << schedulerEndTime - schedulerStartTime << " " 
