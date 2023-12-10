@@ -250,7 +250,7 @@ void TransfersService::executeUrlcopy()
 {
     std::vector<QueueId> queues;
     boost::thread_group g;
-
+    
     // Bail out as soon as possible if there are too many url-copy processes
     int maxUrlCopy = config::ServerConfig::instance().get<int>("MaxUrlCopyProcesses");
     int urlCopyCount = countProcessesWithName("fts_url_copy");
@@ -273,6 +273,9 @@ void TransfersService::executeUrlcopy()
         int maxUrlCopy = config::ServerConfig::instance().get<int>("MaxUrlCopyProcesses");
         int urlCopyCount = countProcessesWithName("fts_url_copy");
         int availableUrlCopySlots = maxUrlCopy - urlCopyCount;
+
+        Scheduler::SchedulerFunction schedulerFunction = Scheduler::getSchedulerFunction();
+        Allocator::AllocatorFunction allocatorFunction = Allocator::getAllocatorFunction();
 
         if (availableUrlCopySlots <= 0) {
             FTS3_COMMON_LOGGER_NEWLOG(WARNING)
