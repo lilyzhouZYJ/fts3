@@ -30,7 +30,7 @@ using namespace db;
 namespace fts3 {
 namespace server {
 
-std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::allQueueDeficitSlots = std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>>();
+std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>> Scheduler::allQueueDeficitSlots = std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, long long>>();
 
 Scheduler::SchedulerAlgorithm Scheduler::getSchedulerAlgorithm() {
     std::string schedulerConfig = config::ServerConfig::instance().get<std::string>("TransfersServiceSchedulingAlgorithm");
@@ -338,14 +338,14 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
     std::map<VoName, std::map<ActivityName, int>> assignedSlotCounts;
 
     // (1) Store deficit into priority queue.
-    std::priority_queue<std::tuple<int, VoName, ActivityName>> deficitPq;
+    std::priority_queue<std::tuple<long long, VoName, ActivityName>> deficitPq;
 
     for (auto j = Scheduler::allQueueDeficitSlots.begin(); j != Scheduler::allQueueDeficitSlots.end(); j++) {
         VoName voName = j->first;
-        std::map<ActivityName, int> activityDeficits = j->second;
+        std::map<ActivityName, long long> activityDeficits = j->second;
         for (auto k = activityDeficits.begin(); k != activityDeficits.end(); k++) {
             ActivityName activityName = k->first;
-            int deficit = k->second;
+            long long deficit = k->second;
 
             // Only include a queue in priority queue if the queue has pending transfers.
             if (queueSubmittedCounts[voName][activityName] > 0) {
@@ -362,13 +362,15 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
             totalActiveCount += j->second;
         }
     }
-    int availableSlots = maxSlots - totalActiveCount;
-    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Actual available slots (maxSlots-totalActiveSlots) = " << availableSlots << " (lzhou)" << commit;
 
-    if (availableSlots <= 0) {
+    if (totalActiveCount >= maxSlots) {
         // No more available slots to assign
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Actual available slots (maxSlots-totalActiveSlots) = 0, no available slots to assign (lzhou)" << commit;
         return assignedSlotCounts;
     }
+
+    int availableSlots = maxSlots - (int) totalActiveCount;
+    FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Actual available slots (maxSlots-totalActiveSlots) = " << availableSlots << " (lzhou)" << commit;
 
     // (3) Assign each of the available slot using priority queue.
     for (int i = 0; i < availableSlots; i++) {
@@ -379,9 +381,9 @@ std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> Scheduler::a
         }
 
         // (i) Pop top element from priority queue.
-        std::tuple<int, VoName, ActivityName> nextPqElement = deficitPq.top();
+        std::tuple<long long, VoName, ActivityName> nextPqElement = deficitPq.top();
         deficitPq.pop();
-        int deficit = std::get<0>(nextPqElement);
+        long long deficit = std::get<0>(nextPqElement);
         VoName voName = std::get<1>(nextPqElement);
         ActivityName activityName = std::get<2>(nextPqElement);
 
@@ -574,7 +576,7 @@ std::map<std::string, int> Scheduler::assignShouldBeSlotsUsingHuntingtonHill(
     double weightSum = 0;
     for (auto i = activeAndPendingCounts.begin(); i != activeAndPendingCounts.end(); i++) {
         std::string queueName = i->first;
-        int count = i->second;
+        long long count = i->second;
         if (count > 0 && weights[queueName] > 0) {
             weightSum += weights[queueName];
         }
@@ -634,7 +636,7 @@ void Scheduler::computeDeficitSlots(
 ){
     FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Scheduler: in computeDeficitSlots (lzhou)" << commit;
 
-    std::map<VoName, std::map<ActivityName, int>> &deficits = Scheduler::allQueueDeficitSlots;
+    std::map<VoName, std::map<ActivityName, long long>> &deficits = Scheduler::allQueueDeficitSlots;
 
     for (auto i = queueActiveCounts.begin(); i != queueActiveCounts.end(); i++) {
         VoName voName = i->first;
@@ -653,7 +655,7 @@ void Scheduler::computeDeficitSlots(
                     // Initialize
                     deficits[voName][activityName] = 0;
                 }
-                deficits[voName][activityName] += shouldBeAllocatedCount - activeCount;
+                deficits[voName][activityName] += (long long) shouldBeAllocatedCount - activeCount;
 
                 FTS3_COMMON_LOGGER_NEWLOG(INFO) << "deficit[vo=" << voName << "]"
                                                 << "[activity=" << activityName << "]"

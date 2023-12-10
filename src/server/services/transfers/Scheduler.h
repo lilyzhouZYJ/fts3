@@ -70,7 +70,10 @@ public:
     using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&);
 
     // Stores deficits of queues
-    static std::map<VoName, std::map<ActivityName, int>> allQueueDeficitSlots;
+    // Note that realistically, deficits should fit into int data type; however, the database
+    // query functions for fetching the number of active/submitted transfers return long long
+    // values. Hence, the deficit ends up being of type long long as well.
+    static std::map<VoName, std::map<ActivityName, long long>> allQueueDeficitSlots;
 
     // Returns the scheduling algorithm based on the config
     static SchedulerAlgorithm getSchedulerAlgorithm();

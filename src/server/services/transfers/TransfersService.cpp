@@ -250,7 +250,7 @@ void TransfersService::executeUrlcopy()
 {
     std::vector<QueueId> queues;
     boost::thread_group g;
-    
+
     // Bail out as soon as possible if there are too many url-copy processes
     int maxUrlCopy = config::ServerConfig::instance().get<int>("MaxUrlCopyProcesses");
     int urlCopyCount = countProcessesWithName("fts_url_copy");
@@ -285,14 +285,12 @@ void TransfersService::executeUrlcopy()
         }
 
         time_t allocatorStartTime = time(0);
-        Allocator::AllocatorFunction allocatorFunction = Allocator::getAllocatorFunction();
         std::map<Pair, int> slotsPerLink = allocatorFunction(queues);
         time_t allocatorEndTime = time(0);
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: Time to execute allocator: " << allocatorStartTime - allocatorEndTime
                                         << commit;
 
         time_t schedulerStartTime = time(0);
-        Scheduler::SchedulerFunction schedulerFunction = Scheduler::getSchedulerFunction();
         std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
         time_t schedulerEndTime = time(0);
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << schedulerEndTime - schedulerStartTime << " " 
