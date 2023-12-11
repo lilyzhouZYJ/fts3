@@ -38,6 +38,7 @@
 #include "MaximumFlow.h"
 
 #include <ctime>
+#include <memory>
 
 using namespace fts3::common;
 
@@ -57,6 +58,21 @@ TransfersService::TransfersService(): BaseService("TransfersService")
 
     monitoringMessages = config::ServerConfig::instance().get<bool>("MonitoringMessaging");
     schedulingInterval = config::ServerConfig::instance().get<boost::posix_time::time_duration>("SchedulingInterval"); 
+
+    // Check configuration to determine which scheduler algorithm to use
+    Scheduler::SchedulerAlgorithm schedulerAlg = Scheduler::getSchedulerAlgorithm();
+    switch (schedulerAlg) {
+        case Scheduler::SchedulerAlgorithm::RANDOMIZED:
+            scheduler = std::unique_ptr<RandomizedScheduler>(new RandomizedScheduler());
+            break;
+        case Scheduler::SchedulerAlgorithm::DEFICIT_SLOT:
+            scheduler = std::unique_ptr<DeficitScheduler>(new DeficitScheduler());
+            break;
+        default:
+            // Default to randomized
+            scheduler = std::unique_ptr<RandomizedScheduler>(new RandomizedScheduler());
+            break;
+    }
 }
 
 TransfersService::~TransfersService()
@@ -274,7 +290,6 @@ void TransfersService::executeUrlcopy()
         int urlCopyCount = countProcessesWithName("fts_url_copy");
         int availableUrlCopySlots = maxUrlCopy - urlCopyCount;
 
-        Scheduler::SchedulerFunction schedulerFunction = Scheduler::getSchedulerFunction();
         Allocator::AllocatorFunction allocatorFunction = Allocator::getAllocatorFunction();
 
         if (availableUrlCopySlots <= 0) {
@@ -291,7 +306,7 @@ void TransfersService::executeUrlcopy()
                                         << commit;
 
         time_t schedulerStartTime = time(0);
-        std::map<std::string, std::list<TransferFile>> scheduledFiles = schedulerFunction(slotsPerLink, queues);
+        std::map<std::string, std::list<TransferFile>> scheduledFiles = scheduler->doSchedule(slotsPerLink, queues);
         time_t schedulerEndTime = time(0);
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << schedulerEndTime - schedulerStartTime << " " 
                                         << "(lzhou)" << commit;

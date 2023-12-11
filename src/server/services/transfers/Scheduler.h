@@ -25,30 +25,30 @@
 
 #ifndef SCHEDULER_H_
 #define SCHEDULER_H_
+
 namespace fts3 {
 namespace server {
 
 /*
- * The Scheduler class implements the scheduling process of TransfersService. It takes as input
- * a mapping from each pair to the maximum number of slots allocated to that pair, as computed
- * by the Allocator component, and produces an output that maps each vo to a list of TransferFiles
- * that will be scheduled.
+ * The Scheduler class implements the scheduling process of TransfersService. Its main scheduling
+ * functionality resides in the doSchedule() method, which takes as input a mapping from each pair
+ * to the maximum number of slots allocated to that pair (as computed by the Allocator component),
+ * and produces an output that maps each VO to a list of TransferFiles that will be scheduled.
  *
- * Currently, this class provides two scheduling algorithms: randomized algorithm, and deficit-based
- * priority-queueing algorithm. The randomized algorithm is implemented in doRandomizedSchedule, and
- * the deficit-based algorithm is implemented in doDeficitScheduleUsingSlot. The suffix  "UsingSlot"
- * is used to indicate that this algorithm uses slots as resource constraints, and future development
- * may introduce a deficit-based algorithm using bandwidth as constraints.
+ * Currently, there are two scheduling algorithms provided: randomized algorithm, and deficit-based
+ * priority-queueing algorithm. They are implemented in two child classes that inherit from Scheduler:
+ * RandomizedScheduler and DeficitScheduler, respectively. Both child classes implement their own
+ * doSchedule() that executes their respective algorithms.
  *
- * This class interfaces with TransfersService by providing a function pointer to either doRandomizedSchedule
- * or doDeficitScheduleUsingSlot, depending on the configuration specification for TransfersServiceSchedulingAlgorithm,
+ * TransfersService interfaces with the Scheduler component by having a Scheduler instance as a
+ * member variable. The TransfersService constructor is responsible for instantiating a Scheduler
+ * object of the correct child class, based on the configuration specification for TransfersServiceSchedulingAlgorithm,
  * which can be set to either RANDOMIZED or DEFICIT.
  *
  * For future development, if a new scheduling algorithm is introduced, the operator should introduce
- * a new function doNewSchedule that implements the logic of the algorithm. The operator should also
- * modify the getSchedulerAlgorithm and getSchedulerFunction functions to include the new algorithm.
- * Additionally, the operator needs to modify serverconfigreader.cpp to include the new scheduler
- * algorithm as options for the configuration file.
+ * a new child class that inherits from Scheduler. The child class must implement the doSchedule() method.
+ * Additionally, the operator needs to add the new algorithm to Scheduler::SchedulerAlgorithm and 
+ * Scheduler::getSchedulerAlgorithm(), as well as the TransfersService constructor.
  */
 
 class Scheduler
@@ -66,192 +66,33 @@ public:
     // Define ActivityName type, which is std::string, for the sake of clarity
     using ActivityName = std::string;
 
-    // Function pointer to the scheduler algorithm
-    using SchedulerFunction = std::map<VoName, std::list<TransferFile>> (*)(std::map<Pair, int>&, std::vector<QueueId>&);
-
-    // Stores deficits of queues
-    // Note that realistically, deficits should fit into int data type; however, the database
-    // query functions for fetching the number of active/submitted transfers return long long
-    // values. Hence, the deficit ends up being of type long long as well.
-    static std::map<VoName, std::map<ActivityName, long long>> allQueueDeficitSlots;
-
-    // Returns the scheduling algorithm based on the config
-    static SchedulerAlgorithm getSchedulerAlgorithm();
-
-    // Returns function pointer to the scheduler algorithm
-    static SchedulerFunction getSchedulerFunction();
-
-    // The scheduling functions below should execute the corresponding
-    // scheduling algorithm, and they should return a mapping from
-    // VOs to the list of TransferFiles to be scheduled by TransferService.
+    Scheduler(){
+    };
 
     /**
-     * Run scheduling using weighted randomization.
+     * Returns the scheduling algorithm based on the config.
+    */
+    static Scheduler::SchedulerAlgorithm getSchedulerAlgorithm();
+
+    /**
+     * Run scheduling. This is a pure virtual function that must be implemented by child classes.
      * @param slotsPerLink Number of slots assigned to each link, as determined by allocator
      * @param queues All current pending transfers
      * @return Mapping from each VO to the list of transfers to be scheduled.
      */
-    static std::map<VoName, std::list<TransferFile>> doRandomizedSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
+    virtual std::map<VoName, std::list<TransferFile>> doSchedule(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues) = 0;
 
-    /**
-     * Run deficit-based priority queueing scheduling, using slots as resource constraint.
-     * @param slotsPerLink number of slots assigned to each link, as determined by allocator
-     * @param queues All current pending transfers
-     * @return Mapping from each VO to the list of transfers to be scheduled.
-     */
-    static std::map<VoName, std::list<TransferFile>> doDeficitScheduleUsingSlot(std::map<Pair, int> &slotsPerLink, std::vector<QueueId> &queues);
-
-    /* Helper functions */
-
-    /**
-     * Compute the number of active transfers for each activity in each vo for the pair.
-     * @param src Source node
-     * @param dest Destination node
-     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight
-    */
-    static std::map<VoName, std::map<ActivityName, long long>> computeActiveCounts(
-        std::string src,
-        std::string dest,
-        std::map<std::string, std::map<std::string, double>> &voActivityWeights
-    );
-
-    /**
-     * Compute the number of submitted transfers for each activity in each vo for the pair.
-     * @param src Source node
-     * @param dest Destination node
-     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight
-    */
-    static std::map<VoName, std::map<ActivityName, long long>> computeSubmittedCounts(
-        std::string src,
-        std::string dest,
-        std::map<std::string, std::map<std::string, double>> &voActivityWeights
-    );
-
-    /**
-     * Compute the number of should-be-allocated slots for each queue in a given pair.
-     * @param maxPairSlots Max number of slots given to the pair, as determined by allocator.
-     * @param voWeights Maps each VO in this pair to the VO's weight.
-     * @param voActivityWeights Maps each VO to a mapping between each of its activities to the activity's weight.
-     * @param queueActiveCounts Maps each VO to a mapping between each of its activities to the activity's number of active slots.
-     * @param queueSubmittedCounts Maps each VO to a mapping between each of its activities to the activity's number of submitted slots.
-    */
-    static std::map<VoName, std::map<ActivityName, int>> computeShouldBeSlots(
-        int maxPairSlots,
-        std::map<VoName, double> &voWeights,
-        std::map<VoName, std::map<ActivityName, double>> &voActivityWeights,
-        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
-    );
-
-    /**
-     * Assign should-be-allocated slots to each VO, using Huntington-Hill algorithm.
-     * @param voWeights Weight of each VO.
-     * @param maxPairSlots Max number of slots to be allocated to the VOs.
-     * @param queueActiveCounts Number of active transfers associated with each VO and each activity in the VO.
-     * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
-    */
-    static std::map<VoName, int> assignShouldBeSlotsToVos(
-        std::map<VoName, double> &voWeights,
-        int maxPairSlots,
-        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
-    );
-
-    /**
-     * Assign should-be-allocated slots to each activity, using Huntington-Hill algorithm.
-     * @param activityWeights Weight of each activity.
-     * @param voMaxSlots Max number of slots to be allocated to the activities.
-     * @param activityActiveCounts Number of active transfers associated with each activity.
-     * @param activitySubmittedCounts Number of submitted transfers associated with each activity.
-    */
-    static std::map<ActivityName, int> assignShouldBeSlotsToActivities(
-        std::map<ActivityName, double> &activityWeights,
-        int voMaxSlots,
-        std::map<ActivityName, long long> &activityActiveCounts,
-        std::map<ActivityName, long long> &activitySubmittedCounts
-    );
-
-    /**
-     * Assign slots to the VOs/activities via the Huntington-Hill algorithm.
-     * (Both VO and activity will be referred to as queue here, because this function will be used for both).
-     * @param weights Maps each queue name to the respective weight.
-     * @param maxSlots Max number of slots to be allocated.
-     * @param activeAndPendingCounts Number of active or pending transfers for each queue.
-    */
-    static std::map<std::string, int> assignShouldBeSlotsUsingHuntingtonHill(
-        std::map<std::string, double> &weights,
-        int maxSlots,
-        std::map<std::string, long long> &activeAndPendingCounts
-    );
-
-    /**
-     * Compute the deficit for each queue in a pair. This will update Scheduler::allQueueDeficitSlots.
-     * @param queueShouldBeAllocated Number of should-be-allocated slots for each activity in each VO.
-     * @param queueActiveCounts Number of active slots for each activity in each VO.
-     * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
-    */
-    static void computeDeficitSlots(
-        std::map<VoName, std::map<ActivityName, int>> &queueShouldBeAllocated,
-        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, long long>>& queueSubmittedCounts
-    );
-
-    /**
-     * Assign slots to each queue using a priority queue of deficits.
-     * @param maxSlots Max number of slots available to this link.
-     * @param queueActiveCounts Number of active slots for each activity in each VO.
-     * @param queueSubmittedCounts Number of submitted transfers associated with each VO and each activity in the VO.
-    */
-    static std::map<VoName, std::map<ActivityName, int>> assignSlotsUsingDeficitPriorityQueue(
-        int maxSlots,
-        std::map<VoName, std::map<ActivityName, long long>> &queueActiveCounts,
-        std::map<VoName, std::map<ActivityName, long long>> &queueSubmittedCounts
-    );
-
-    /**
-     * Fetch TransferFiles based on the number of slots assigned to each queue.
-     * @param pair The link we are currently processing.
-     * @param assignedSlotCounts The number of slots assigned to a queue.
-     * @param[out] scheduledFiles Mapping from each VO to the list of transfers to be scheduled.
-    */
-    static void getTransferFilesBasedOnSlots(
-        Pair pair,
-        std::map<VoName, std::map<ActivityName, int>>& assignedSlotCounts,
-        std::map<VoName, std::list<TransferFile>>& scheduledFiles
-    );
-
-private:
-
-    /**
-     * Fetch from the database the activity weights.
-     * @param queues All current pending transfers
-    */
-    static std::map<VoName, std::map<ActivityName, double>> getActivityWeights(std::vector<QueueId> &queues);
-
-    /**
-     * Fetch from the database the VO weights. Then process "public" weights and populate
-     * the vector of "unschedulabe" transfers (i.e. VO weight <= 0).
-     * @param slotsPerLink Number of slots assigned to each link, as determined by allocator
-     * @param queues All current pending transfers
-     * @param[out] unschedulable [Output] Unschedulable transfers
-     * @return A map from each pair to a map from each of the pair's VOs and the VO weights
-    */
-    static std::map<Pair, std::map<VoName, double>> getVoWeightsInEachPair(
-        std::map<Pair, int> &slotsPerLink, 
-        std::vector<QueueId> &queues,
-        std::vector<QueueId> &unschedulable
-    );
-
+protected:
     /**
      * Transfers in unschedulable queues must be set to fail.
      * @param[out] unschedulable    List of unschedulable transfers.
      * @param slotsPerLink          Number of slots allocated to a link.
     */
-    static void failUnschedulable(const std::vector<QueueId> &unschedulable, std::map<Pair, int> &slotsPerLink);
+    void failUnschedulable(const std::vector<QueueId> &unschedulable, std::map<Pair, int> &slotsPerLink);
 };
 
 
 } // end namespace server
 } // end namespace fts3
 
-#endif // DAEMONTOOLS_H_
+#endif

@@ -24,11 +24,14 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "db/generic/QueueId.h"
 #include "../BaseService.h"
 #include "Allocator.h"
 #include "Scheduler.h"
+#include "DeficitScheduler.h"
+#include "RandomizedScheduler.h"
 
 namespace fts3 {
 namespace server {
@@ -53,6 +56,8 @@ protected:
     std::string logDir;
     std::string msgDir;
     boost::posix_time::time_duration schedulingInterval;
+
+    std::unique_ptr<Scheduler> scheduler;
 
     /**
      * Execute the file transfers.

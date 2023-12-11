@@ -18,19 +18,19 @@
 #include <boost/test/test_tools.hpp>
 #include <queue>
 
-#include "server/services/transfers/Scheduler.h"
+#include "server/services/transfers/DeficitScheduler.h"
 
 using namespace fts3::server;
 using namespace fts3::common;
 
 BOOST_AUTO_TEST_SUITE(server)
-BOOST_AUTO_TEST_SUITE(SchedulerTestSuite)
+BOOST_AUTO_TEST_SUITE(DeficitSchedulerTestSuite)
 
 /**
  * This test checks that given sufficient pending transfers in queues, their number
  * of should-be-allocated slots will be proportional to their relative weights.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_ProportionalToWeights)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_ProportionalToWeights, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -55,7 +55,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_Proporti
     queueSubmittedCounts[vo1][act12] = 100;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> shouldBeAllocated;
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -72,7 +72,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_Proporti
  * go to its peer queue. This makes sure that the computation of should-be-allocated 
  * slots is work-conserving.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithEmptyQueue)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithEmptyQueue, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -97,7 +97,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithEmpt
     queueSubmittedCounts[vo1][act12] = 30;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> shouldBeAllocated;
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -115,7 +115,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithEmpt
  * E.g. if the queue has 10 active slots and 50 pending transfers, it should receive 60
  * slots instead of 50.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithActiveSlots)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithActiveSlots, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -140,7 +140,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithActi
     queueSubmittedCounts[vo1][act12] = 0;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> shouldBeAllocated;
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -151,7 +151,10 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeShouldBeAllocatedSlots_WithActi
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act12], 0);
 }
 
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeDeficits)
+/**
+ * This test checks the computation of deficit values.
+*/
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_ComputeDeficits, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -171,17 +174,17 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_ComputeDeficits)
     queueShouldBeAllocated[vo1][act11] = 60;
     queueShouldBeAllocated[vo1][act12] = 0;
 
-    Scheduler::computeDeficitSlots(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
+    this->computeDeficitSlots(queueShouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 50);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 50);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 0);
 }
 
 /**
  * This test checks that the Scheduler will schedule based on deficit values,
  * and that the deficit value decreases as slots are assigned to a queue.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -198,14 +201,14 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue)
     queueSubmittedCounts[vo1][act11] = 50;
     queueSubmittedCounts[vo1][act12] = 10;
 
-    Scheduler::allQueueDeficitSlots[vo1][act11] = 50;
-    Scheduler::allQueueDeficitSlots[vo1][act12] = 10;
+    this->allQueueDeficitSlots[vo1][act11] = 50;
+    this->allQueueDeficitSlots[vo1][act12] = 10;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> assignedSlotCounts;
-    assignedSlotCounts = Scheduler::assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
+    assignedSlotCounts = this->assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 0);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 0);
 
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act11], 50);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act12], 10);
@@ -215,7 +218,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue)
  * This test checks that the deficit value is reset to 0 when the number of slots
  * assigned reaches the number of pending transfers for a queue.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue_DeficitResetToZero)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue_DeficitResetToZero, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -232,14 +235,14 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue_D
     queueSubmittedCounts[vo1][act11] = 50;
     queueSubmittedCounts[vo1][act12] = 10;
 
-    Scheduler::allQueueDeficitSlots[vo1][act11] = 100; // give it a high deficit
-    Scheduler::allQueueDeficitSlots[vo1][act12] = 10;
+    this->allQueueDeficitSlots[vo1][act11] = 100; // give it a high deficit
+    this->allQueueDeficitSlots[vo1][act12] = 10;
 
     std::map<Scheduler::VoName, std::map<Scheduler::ActivityName, int>> assignedSlotCounts;
-    assignedSlotCounts = Scheduler::assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
+    assignedSlotCounts = this->assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 0);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 0);
 
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act11], 50);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act12], 10);
@@ -263,7 +266,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AssignSlotsUsingDeficitPriorityQueue_D
  *    act12 receives 1. This does not reflect the relative weights of the two activities
  *    but rather is a result of the deficit algorithm avoiding starvation.
 */
-BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvation)
+BOOST_FIXTURE_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvation, DeficitScheduler)
 {
     std::string vo1 = "vo1";
     std::string act11 = "act11";
@@ -292,7 +295,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     queueSubmittedCounts[vo1][act11] = 0;
     queueSubmittedCounts[vo1][act12] = 20;
 
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -302,15 +305,15 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act11], 0);
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act12], 10);
 
-    Scheduler::computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
+    this->computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 0);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 10);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 10);
 
-    assignedSlotCounts = Scheduler::assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
+    assignedSlotCounts = this->assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 0);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 0);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act11], 0);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act12], 10);
 
@@ -322,7 +325,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     queueSubmittedCounts[vo1][act11] = 5;
     queueSubmittedCounts[vo1][act12] = 10;
 
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -332,15 +335,15 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act11], 2);
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act12], 8);
 
-    Scheduler::computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
+    this->computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 2);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], -2);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 2);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], -2);
 
-    assignedSlotCounts = Scheduler::assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
+    assignedSlotCounts = this->assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 2);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], -2);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 2);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], -2);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act11], 0);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act12], 0);
 
@@ -352,7 +355,7 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     queueSubmittedCounts[vo1][act11] = 5;
     queueSubmittedCounts[vo1][act12] = 10;
 
-    shouldBeAllocated = Scheduler::computeShouldBeSlots(
+    shouldBeAllocated = this->computeShouldBeSlots(
         maxSlots,
         voWeights,
         voActivityWeights,
@@ -362,15 +365,15 @@ BOOST_AUTO_TEST_CASE(TestDeficitScheduler_AccumulationOfDeficitPreventsStarvatio
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act11], 2);
     BOOST_CHECK_EQUAL(shouldBeAllocated[vo1][act12], 8);
 
-    Scheduler::computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
+    this->computeDeficitSlots(shouldBeAllocated, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 4);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 1);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 4);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 1);
 
-    assignedSlotCounts = Scheduler::assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
+    assignedSlotCounts = this->assignSlotsUsingDeficitPriorityQueue(maxSlots, queueActiveCounts, queueSubmittedCounts);
 
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act11], 0);
-    BOOST_CHECK_EQUAL(Scheduler::allQueueDeficitSlots[vo1][act12], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act11], 0);
+    BOOST_CHECK_EQUAL(this->allQueueDeficitSlots[vo1][act12], 0);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act11], 4);
     BOOST_CHECK_EQUAL(assignedSlotCounts[vo1][act12], 1);
 }
