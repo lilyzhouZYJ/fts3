@@ -35,22 +35,21 @@
 #include "FileTransferExecutor.h"
 
 #include <msg-bus/producer.h>
+#include "MaximumFlow.h"
 
 #include <ctime>
+#include <memory>
 
 using namespace fts3::common;
-
 
 namespace fts3 {
 namespace server {
 
 extern time_t retrieveRecords;
 
-
 TransfersService::TransfersService(): BaseService("TransfersService")
 {
     cmd = "fts_url_copy";
-
     logDir = config::ServerConfig::instance().get<std::string>("TransferLogDirectory");
     msgDir = config::ServerConfig::instance().get<std::string>("MessagingDirectory");
     execPoolSize = config::ServerConfig::instance().get<int>("InternalThreadPool");
@@ -58,9 +57,23 @@ TransfersService::TransfersService(): BaseService("TransfersService")
     infosys = config::ServerConfig::instance().get<std::string>("Infosys");
 
     monitoringMessages = config::ServerConfig::instance().get<bool>("MonitoringMessaging");
-    schedulingInterval = config::ServerConfig::instance().get<boost::posix_time::time_duration>("SchedulingInterval");
-}
+    schedulingInterval = config::ServerConfig::instance().get<boost::posix_time::time_duration>("SchedulingInterval"); 
 
+    // Check configuration to determine which scheduler algorithm to use
+    Scheduler::SchedulerAlgorithm schedulerAlg = Scheduler::getSchedulerAlgorithm();
+    switch (schedulerAlg) {
+        case Scheduler::SchedulerAlgorithm::RANDOMIZED:
+            scheduler = std::unique_ptr<RandomizedScheduler>(new RandomizedScheduler());
+            break;
+        case Scheduler::SchedulerAlgorithm::DEFICIT_SLOT:
+            scheduler = std::unique_ptr<DeficitScheduler>(new DeficitScheduler());
+            break;
+        default:
+            // Default to randomized
+            scheduler = std::unique_ptr<RandomizedScheduler>(new RandomizedScheduler());
+            break;
+    }
+}
 
 TransfersService::~TransfersService()
 {
@@ -102,9 +115,11 @@ void TransfersService::runService()
     }
 }
 
-
-void TransfersService::getFiles(const std::vector<QueueId>& queues, int availableUrlCopySlots)
-{
+void TransfersService::executeFileTransfers(
+    std::map<std::string, std::list<TransferFile>> scheduledFiles, 
+    int availableUrlCopySlots,
+    std::vector<QueueId> queues
+){
     auto db = DBSingleton::instance().getDBObjectInstance();
 
     ThreadPool<FileTransferExecutor> execPool(execPoolSize);
@@ -126,32 +141,16 @@ void TransfersService::getFiles(const std::vector<QueueId>& queues, int availabl
         slotsLeftForSource[i->sourceSe] -= i->activeCount;
     }
 
-    try
+    try 
     {
-        if (queues.empty())
-            return;
-
-        // now get files to be scheduled
-        std::map<std::string, std::list<TransferFile> > voQueues;
-
-
-        time_t start = time(0);
-        db->getReadyTransfers(queues, voQueues);
-        time_t end =time(0);
-        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "DBtime=\"TransfersService\" "
-                                        << "func=\"getFiles\" "
-                                        << "DBcall=\"getReadyTransfers\" " 
-                                        << "time=\"" << end - start << "\"" 
-                                        << commit;
-
-        if (voQueues.empty())
+        if (scheduledFiles.empty())
             return;
 
         // Count of scheduled transfers for activity
         std::map<std::string, int> scheduledByActivity;
 
         // create transfer-file handler
-        TransferFileHandler tfh(voQueues);
+        TransferFileHandler tfh(scheduledFiles);
 
         std::map<std::pair<std::string, std::string>, std::string> proxies;
 
@@ -249,13 +248,13 @@ void TransfersService::getFiles(const std::vector<QueueId>& queues, int availabl
         }
     }
     catch (const boost::thread_interrupted&) {
-        FTS3_COMMON_LOGGER_NEWLOG(ERR) << "Interruption requested in TransfersService:getFiles" << commit;
+        FTS3_COMMON_LOGGER_NEWLOG(ERR) << "Interruption requested in TransfersService:scheduleFiles" << commit;
         execPool.interrupt();
         execPool.join();
     }
     catch (std::exception& e)
     {
-        FTS3_COMMON_LOGGER_NEWLOG(ERR) << "Exception in TransfersService:getFiles " << e.what() << commit;
+        FTS3_COMMON_LOGGER_NEWLOG(ERR) << "Exception in TransfersService:scheduleFiles " << e.what() << commit;
     }
     catch (...)
     {
@@ -263,42 +262,9 @@ void TransfersService::getFiles(const std::vector<QueueId>& queues, int availabl
     }
 }
 
-
-/**
- * Transfers in uneschedulable queues must be set to fail
- */
-static void failUnschedulable(const std::vector<QueueId> &unschedulable)
-{
-    Producer producer(config::ServerConfig::instance().get<std::string>("MessagingDirectory"));
-
-    std::map<std::string, std::list<TransferFile> > voQueues;
-    DBSingleton::instance().getDBObjectInstance()->getReadyTransfers(unschedulable, voQueues);
-
-    for (auto iterList = voQueues.begin(); iterList != voQueues.end(); ++iterList) {
-        const std::list<TransferFile> &transferList = iterList->second;
-        for (auto iterTransfer = transferList.begin(); iterTransfer != transferList.end(); ++iterTransfer) {
-            events::Message status;
-
-            status.set_transfer_status("FAILED");
-            status.set_timestamp(millisecondsSinceEpoch());
-            status.set_process_id(0);
-            status.set_job_id(iterTransfer->jobId);
-            status.set_file_id(iterTransfer->fileId);
-            status.set_source_se(iterTransfer->sourceSe);
-            status.set_dest_se(iterTransfer->destSe);
-            status.set_transfer_message("No share configured for this VO");
-            status.set_retry(false);
-            status.set_errcode(EPERM);
-
-            producer.runProducerStatus(status);
-        }
-    }
-}
-
-
 void TransfersService::executeUrlcopy()
 {
-    std::vector<QueueId> queues, unschedulable;
+    std::vector<QueueId> queues;
     boost::thread_group g;
 
     // Bail out as soon as possible if there are too many url-copy processes
@@ -314,20 +280,40 @@ void TransfersService::executeUrlcopy()
     }
 
     try {
-      time_t start = time(0); //std::chrono::system_clock::now();
+        time_t start = time(0); //std::chrono::system_clock::now();
         DBSingleton::instance().getDBObjectInstance()->getQueuesWithPending(queues);
         // Breaking determinism. See FTS-704 for an explanation.
         std::random_shuffle(queues.begin(), queues.end());
-        // Apply VO shares at this level. Basically, if more than one VO is used the same link,
-        // pick one each time according to their respective weights
-        queues = applyVoShares(queues, unschedulable);
-        // Fail all that are unschedulable
-        failUnschedulable(unschedulable);
+        
+        // Bail out as soon as possible if there are too many url-copy processes
+        int maxUrlCopy = config::ServerConfig::instance().get<int>("MaxUrlCopyProcesses");
+        int urlCopyCount = countProcessesWithName("fts_url_copy");
+        int availableUrlCopySlots = maxUrlCopy - urlCopyCount;
 
-        if (queues.empty()) {
+        Allocator::AllocatorFunction allocatorFunction = Allocator::getAllocatorFunction();
+
+        if (availableUrlCopySlots <= 0) {
+            FTS3_COMMON_LOGGER_NEWLOG(WARNING)
+                << "Reached limitation of MaxUrlCopyProcesses"
+                << commit;
             return;
         }
-        getFiles(queues, availableUrlCopySlots);
+
+        time_t allocatorStartTime = time(0);
+        std::map<Pair, int> slotsPerLink = allocatorFunction(queues);
+        time_t allocatorEndTime = time(0);
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "J&P&C: Time to execute allocator: " << allocatorStartTime - allocatorEndTime
+                                        << commit;
+
+        time_t schedulerStartTime = time(0);
+        std::map<std::string, std::list<TransferFile>> scheduledFiles = scheduler->doSchedule(slotsPerLink, queues);
+        time_t schedulerEndTime = time(0);
+        FTS3_COMMON_LOGGER_NEWLOG(INFO) << "Time to execute scheduler: " << schedulerEndTime - schedulerStartTime << " " 
+                                        << "(lzhou)" << commit;
+
+        // Execute file transfers
+        executeFileTransfers(scheduledFiles, availableUrlCopySlots, queues);
+        
         time_t end = time(0); //std::chrono::system_clock::now();
         FTS3_COMMON_LOGGER_NEWLOG(INFO) << "DBtime=\"TransfersService\" "
                                         << "func=\"executeUrlcopy\" "

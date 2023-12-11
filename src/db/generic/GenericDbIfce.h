@@ -100,8 +100,22 @@ public:
     /// Get a list of transfers ready to go for the given queues
     /// @param queues       Queues for which to check (see getQueuesWithPending)
     /// @param[out] files   A map where the key is the VO. The value is a list of transfers belonging to that VO
+    /// @param slotsPerLink Max number of available slots for each link, as computed by the allocator
     virtual void getReadyTransfers(const std::vector<QueueId>& queues,
-            std::map< std::string, std::list<TransferFile>>& files) = 0;
+            std::map< std::string, std::list<TransferFile>>& files, std::map<Pair, int> &slotsPerLink) = 0;
+
+    /// Get a list of transfers to be scheduled for a vo
+    /// @param sourceSe             Source
+    /// @param destSe               Destination
+    /// @param voName               Name of the vo
+    /// @param activityFilesNum     Number of slots assigned to each activity in the vo
+    /// @param[out] files           A map where the key is the vo, the value is a list of transfers belonging to that vo
+    virtual void getTransferFilesForVo(
+        std::string sourceSe,
+        std::string destSe,
+        std::string voName,
+        std::map<std::string, int>& activityFilesNum,
+        std::map<std::string, std::list<TransferFile>>& files) = 0;
 
     /// Update the status of a transfer
     /// @param jobId            The job ID
@@ -382,6 +396,22 @@ public:
 
     /// Get the configuration for a given storage
     virtual StorageConfig getStorageConfig(const std::string &storage) = 0;
+
+    /// Get link capacities for the given queues
+    virtual std::map<Pair, int> getLinkCapacities(const std::vector<QueueId>& queues,
+        std::map< std::string, std::list<TransferFile>>& files);
+
+    /// Get the activity share for the given vo
+    virtual std::map<std::string, double> getActivityShareForVo(std::string vo) = 0;
+
+    /// Get the number of active transfers for each activity in the given vo for the given link
+    virtual std::map<std::string, long long> getActiveCountForEachActivity(const std::string src, const std::string dst, const std::string vo) = 0;
+
+    /// Get the number of submitted files in each activity within a (src, dst, vo)
+    virtual std::map<std::string, long long> getSubmittedCountInActivity(std::string src, std::string dst, std::string vo);
+
+    /// Get list of activities in a given (src, dst, vo)
+    virtual std::map<std::string, long long> getActivitiesInQueue(std::string src, std::string dst, std::string vo);
 };
 
 #endif // GENERICDBIFCE_H_
